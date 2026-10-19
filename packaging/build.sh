@@ -61,7 +61,7 @@ OSA
 chmod -Rf go-w "$MNT" 2>/dev/null || true
 sync
 hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
-rm -f ../"Computer Use "*.dmg ../"Computer Use.dmg"   # keep only the newest installer at the top
+rm -f ../"Computer Use"*.dmg(N)   # keep only the newest installer at the top
 hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG" >/dev/null
 
 # Logo on the .dmg file itself in Finder (stored as a Finder attribute, so it shows on this Mac).
