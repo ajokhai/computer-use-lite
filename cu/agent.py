@@ -15,7 +15,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import actions, usage
+from . import actions, narrate, usage
 from .config import load_settings
 from .gemini import Gemini
 from .jev import Jev, installed_apps, text_candidates
@@ -77,6 +77,7 @@ class Agent:
     max_rounds: int = 12
     confirm: Callable[[str], bool] = ask_user
     log: Callable[[str], None] = print
+    narrate: Callable[[str], None] = lambda text: None  # short spoken updates while working
     max_jev_actions: int = 40
     gemini: Gemini | None = None
     jev: Jev | None = None
@@ -115,6 +116,7 @@ class Agent:
                     back = f" · back in {usage.fmt_until(e.until)}" if e.until else ""
                     return self._report(f"stopped: {e}{back}")
                 self.log(f"  {e}; switching to {alt} mode")
+                self.narrate(f"{usage.pretty(e.provider) if e.provider != 'gemini' else 'Gemini'} ran out, switching to {alt}")
                 self.mode = alt
                 self._clients()
                 note = "\n(Continue from the current screen; some of this may already be done.)"
@@ -124,7 +126,7 @@ class Agent:
         if self.mode == "jev":
             return self.run_jev(task)
         if self.mode == "gemini":
-            ok, msg = self.gemini.act(task, max_turns=40, confirm=self.confirm, log=self.log, stop=self.stop)
+            ok, msg = self.gemini.act(task, max_turns=40, confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
             return self._report(msg)
 
         history: list[str] = []
@@ -134,6 +136,8 @@ class Agent:
             plan = self.gemini.plan(task, history)
             status, steps = plan.get("status", "continue"), plan.get("steps") or []
             self.log(f"[plan {round_ + 1}] {status}: {plan.get('summary', '')}")
+            if status == "continue" and plan.get("summary"):
+                self.narrate(plan["summary"])
             if status == "done" or (status != "blocked" and not steps):
                 return self._report(plan.get("summary", "done"))
             if status == "blocked":
@@ -161,6 +165,7 @@ class Agent:
             op, el = d["op"], d["element"]
             desc = _describe_op(d)
             self.log(f"  jev → {desc}  p={d['op_p']:.2f}")
+            self.narrate(narrate.jev_op(op, el.label if el else "", d["text"], d["app"]))
 
             if op == "DONE":
                 return self._report(f"done (jev p={d['op_p']:.2f})")
@@ -170,7 +175,7 @@ class Agent:
                     return self._report("blocked: Jev is stuck (add GEMINI_API_KEY to let Gemini take over)")
                 self.stats["gemini_steps"] += 1
                 ok, msg = self.gemini.act(f"Task: {task}\nDone so far: {history[-8:]}\nDo the next step or two, then stop.",
-                                          max_turns=6, confirm=self.confirm, log=self.log, stop=self.stop)
+                                          max_turns=6, confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
                 history.append(f"gemini: {msg}")
                 recent.clear()
                 misses = 0
@@ -228,6 +233,7 @@ class Agent:
     def step(self, s: dict) -> tuple[bool, str]:
         kind = s.get("kind")
         self.log(f"  • {_fmt(s)}")
+        self.narrate(narrate.step(s))
         if (s.get("risky") and not self.allow_risky) or self.confirm_all:
             if not self.confirm(f"About to: {_fmt(s)}. Proceed?"):
                 return False, "(user declined)"
@@ -293,7 +299,7 @@ class Agent:
         self.log(f"    {why} → gemini vision")
         self.stats["gemini_steps"] += 1
         ok, msg = self.gemini.act(f"Do exactly this one step, then stop: {_fmt(s)}", max_turns=6,
-                                  confirm=self.confirm, log=self.log, stop=self.stop)
+                                  confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
         return ok, f"({msg})"
 
     def _report(self, msg: str) -> str:

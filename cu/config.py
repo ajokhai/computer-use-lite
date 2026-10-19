@@ -17,6 +17,12 @@ DEFAULTS = {
     "confirm_all": False,
     "allow_risky": False,
     "auto_switch": True,
+    "hands_free": False,  # always listening for "Computer, …"
+    "speak_replies": True,
+    "narrate": False,  # talk through each step while working
+    "speaking_voice": "mac:",  # "mac:<name>" (empty = system voice), "kokoro:<id>", or "gemini:<name>" (see cu/say.py)
+    "speech_engine": "apple",  # "apple" or a model id like "moonshine:base" (see cu/stt.py)
+    "custom_speech_models": [],  # model ids added with Voice Engine › Add Custom Model…
     "gemini_models": ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview"],
     # Neither provider exposes remaining quota, so these come from your dashboards.
     # None means "unknown": usage is still counted, just not shown against a limit.

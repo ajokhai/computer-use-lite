@@ -7,7 +7,7 @@ from typing import Callable
 
 from google import genai
 
-from . import actions, usage
+from . import actions, narrate as narration, usage
 from .config import load_settings
 from .screen import ax_elements, screen_size, screenshot_png
 
@@ -155,6 +155,7 @@ class Gemini:
         confirm: Callable[[str], bool] = lambda msg: input(f"{msg} [y/N] ").strip().lower() == "y",
         log: Callable[[str], None] = print,
         stop=None,
+        narrate: Callable[[str], None] = lambda text: None,
     ) -> tuple[bool, str]:
         sw, sh = screen_size()
         X = lambda v: int(int(v) / 1000 * sw)
@@ -175,6 +176,7 @@ class Gemini:
             for call in calls:
                 name, args = _get(call, "name"), dict(_get(call, "arguments") or {})
                 log(f"  gemini → {name} {json.dumps({k: v for k, v in args.items() if k != 'safety_decision'})}")
+                narrate(narration.gemini_action(name, args))
                 if name == "yield_to_user":
                     return False, f"needs user: {args.get('reason')}"
                 extra = {}

@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Build "Computer Use.app" and put "Computer Use <version>.dmg" next to the project folder.
+# Build "Computer Use.app" and put "Computer Use <version>.dmg" next to the project folder,
+# plus the optional "Computer Use Voice Pack <version>.zip" (Parakeet + Moonshine), kept out of the app to keep it small.
 # The build runs outside ~/Documents: iCloud/Finder attach extended attributes there, which codesign rejects.
 set -e
 cd "${0:A:h}/.."
@@ -14,14 +15,37 @@ uv run pyinstaller --noconfirm --windowed --name "Computer Use" \
   --collect-submodules mcp.server --collect-submodules mcp.shared --exclude-module mcp.cli \
   --collect-submodules rumps --paths "$PWD" --collect-submodules cu \
   --hidden-import AppKit --hidden-import Quartz --hidden-import ApplicationServices \
-  --exclude-module tkinter \
+  --exclude-module cu.stt --exclude-module cu.voice_helper --exclude-module cu.melshim --exclude-module cu.tts \
+  --exclude-module kokoro_onnx --exclude-module phonemizer --exclude-module espeakng_loader \
+  --exclude-module mlx --exclude-module parakeet_mlx --exclude-module moonshine_onnx \
+  --exclude-module onnxruntime --exclude-module sounddevice --exclude-module librosa \
+  --exclude-module numba --exclude-module llvmlite --exclude-module scipy --exclude-module sklearn \
+  --exclude-module torch --exclude-module tkinter \
   packaging/launcher.py
+
+# --- Voice Pack: the cu-voice helper with the local speech engines ---
+uv run pyinstaller --noconfirm --console --name cu-voice \
+  --distpath "$OUT/pack" --workpath "$OUT/work-pack" --specpath "$OUT" \
+  --paths "$PWD" --hidden-import cu.stt --hidden-import cu.melshim --hidden-import cu.tts \
+  --collect-all kokoro_onnx --collect-all espeakng_loader --collect-all phonemizer --collect-all language_tags \
+  --collect-all mlx --collect-submodules parakeet_mlx --collect-all moonshine_onnx \
+  --collect-all onnxruntime --collect-all _sounddevice_data --hidden-import sounddevice \
+  --exclude-module librosa --exclude-module numba --exclude-module llvmlite --exclude-module scipy \
+  --exclude-module sklearn --exclude-module torch --exclude-module tkinter \
+  --exclude-module google.genai --exclude-module mcp --exclude-module rumps --exclude-module pyautogui \
+  packaging/voice_launcher.py
+xattr -cr "$OUT/pack/cu-voice"
+codesign --force --deep --sign - "$OUT/pack/cu-voice/cu-voice"
+rm -f ../"Computer Use Voice Pack"*.zip(N)
+ditto -c -k --keepParent "$OUT/pack/cu-voice" "../Computer Use Voice Pack $VERSION.zip"
 
 APP="$OUT/dist/Computer Use.app"
 PL="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PL"
 /usr/libexec/PlistBuddy -c "Add :NSAppleEventsUsageDescription string 'Computer Use controls other apps to carry out your tasks.'" "$PL"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PL"
+/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Computer Use listens when you talk to it (⌃⌥Space or hands-free).'" "$PL"
+/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Your speech is turned into tasks on this Mac.'" "$PL"
 xattr -cr "$APP"
 codesign --force --deep --sign - "$APP"   # ad-hoc signature so macOS can remember permissions
 codesign --verify --deep "$APP"
@@ -71,5 +95,5 @@ from AppKit import NSImage, NSWorkspace
 NSWorkspace.sharedWorkspace().setIcon_forFile_options_(NSImage.alloc().initWithContentsOfFile_("packaging/AppIcon.icns"), sys.argv[1], 0)
 PY
 
-du -sh "$APP" "$DMG"
+du -sh "$APP" "$DMG" "../Computer Use Voice Pack $VERSION.zip"
 echo "app: $APP"

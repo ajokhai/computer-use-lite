@@ -19,6 +19,7 @@ load_keys()
 
 INSTRUCTIONS = """Tools to operate the user's whole Mac desktop (any app, not just a browser).
 Loop: take_screenshot and/or list_screen_elements -> one action -> check the result.
+Use speak() to tell the user briefly what you're doing and what you found; they may be listening, not watching.
 Prefer open_app / open_url / press_keys (keyboard shortcuts) over clicking. Prefer click_element
 (accessibility element by id or description) over click_at (pixel coordinates); use click_at only
 for apps with no useful elements. Ask the user before sending, buying, deleting or submitting anything."""
@@ -58,6 +59,25 @@ def _is_id(s: str) -> bool:
     return s.strip().startswith("e") and s.strip()[1:].isdigit()
 
 
+def _narrate(text: str):
+    """Speak a short update when the user has "Narrate while working" on (shared with the menu bar app)."""
+    from .config import load_settings
+    from . import say
+    s = load_settings()
+    if s.get("narrate"):
+        say.speak(text, s.get("speaking_voice"), interrupt=False)
+
+
+@mcp.tool()
+def speak(text: str) -> str:
+    """Say something out loud to the user in their chosen voice: progress, a question, or the result.
+    Keep it to a sentence. Use it while working so the user hears what you're doing."""
+    from .config import load_settings
+    from . import say
+    say.speak(text, load_settings().get("speaking_voice"))
+    return "spoken"
+
+
 @mcp.tool()
 def take_screenshot() -> Image:
     """Screenshot of the main display. click_at uses this image's pixel coordinates."""
@@ -82,6 +102,7 @@ def click_element(element: str, double: bool = False) -> str:
     el, how = _match(element, els)
     if el is None:
         return f"no element matches {element!r}; call list_screen_elements or use click_at"
+    _narrate(f"Clicking {el.label}" if el.label else "Clicking")
     actions.click(el.x, el.y, clicks=2 if double else 1)
     return f"clicked {el.describe()} ({how})"
 
@@ -101,6 +122,7 @@ def type_text(text: str, element: str = "", press_enter: bool = False, clear_fir
         msg = click_element(element)
         if msg.startswith("no element"):
             return msg
+    _narrate("Typing " + " ".join(text.split()[:6]))
     actions.type_text(text, press_enter=press_enter, clear=clear_first)
     return "typed"
 
@@ -128,6 +150,7 @@ def scroll(direction: str = "down", element: str = "", amount: int = 400) -> str
 @mcp.tool()
 def open_app(name: str) -> str:
     """Launch or bring forward a Mac app by name, e.g. "Notes", "Safari", "System Settings"."""
+    _narrate(f"Opening {name}")
     return f"opened {name}" if actions.open_app(name) else f"no app named {name!r}"
 
 
