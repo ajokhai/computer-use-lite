@@ -77,6 +77,21 @@ def guess_model(text: str) -> str | None:
     return None
 
 
+# Kokoro speaking voices (a curated set; any Kokoro v1.0 id works: a/b = US/UK, f/m = female/male).
+# Kept here, not in tts.py, because the slim app needs the list without the speech libraries.
+KOKORO_VOICES = {
+    "af_heart": "Heart — US, warm",
+    "af_bella": "Bella — US, expressive",
+    "af_nicole": "Nicole — US, soft",
+    "af_sarah": "Sarah — US, clear",
+    "am_michael": "Michael — US, calm",
+    "am_fenrir": "Fenrir — US, deep",
+    "am_puck": "Puck — US, upbeat",
+    "bf_emma": "Emma — British",
+    "bf_isabella": "Isabella — British",
+    "bm_george": "George — British",
+    "bm_fable": "Fable — British, storyteller",
+}
 PACK_DIR = DATA / "VoicePack"
 HELPER = PACK_DIR / "cu-voice" / "cu-voice"
 

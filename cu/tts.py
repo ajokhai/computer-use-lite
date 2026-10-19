@@ -5,25 +5,11 @@ import urllib.request
 from pathlib import Path
 
 from .config import DATA
+from .voicepack import KOKORO_VOICES  # noqa: F401  (kept here for callers)
 
 KOKORO_DIR = DATA / "models" / "kokoro"
 RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 FILES = ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin")
-
-# A curated set; any Kokoro v1.0 voice id works (a = American, b = British, f/m = female/male).
-KOKORO_VOICES = {
-    "af_heart": "Heart — US, warm",
-    "af_bella": "Bella — US, expressive",
-    "af_nicole": "Nicole — US, soft",
-    "af_sarah": "Sarah — US, clear",
-    "am_michael": "Michael — US, calm",
-    "am_fenrir": "Fenrir — US, deep",
-    "am_puck": "Puck — US, upbeat",
-    "bf_emma": "Emma — British",
-    "bf_isabella": "Isabella — British",
-    "bm_george": "George — British",
-    "bm_fable": "Fable — British, storyteller",
-}
 
 _kokoro = None
 

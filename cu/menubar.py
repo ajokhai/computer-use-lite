@@ -311,12 +311,11 @@ class MenuBar(rumps.App):
             self.voice_out_menu.clear()
         current = self.settings.get("speaking_voice") or "mac:"
         has_gemini = bool(_env_key("gemini"))
-        from .tts import KOKORO_VOICES
         groups = [
             ("Mac", [("mac:", "System voice")] + [(f"mac:{n}", f"{n} — {loc.replace('_', '-')}")
                                                    for n, loc in say.mac_voices()[:16]], True),
             ("Kokoro — local, natural" if has_pack else "Kokoro — needs Voice Pack",
-             [(f"kokoro:{k}", v) for k, v in KOKORO_VOICES.items()], has_pack),
+             [(f"kokoro:{k}", v) for k, v in voicepack.KOKORO_VOICES.items()], has_pack),
             ("Gemini — cloud" if has_gemini else "Gemini — needs API key",
              [(f"gemini:{k}", f"{k} — {v}") for k, v in say.GEMINI_VOICES.items()], has_gemini),
         ]
