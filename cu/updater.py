@@ -81,7 +81,9 @@ def install_and_relaunch(dmg: Path, app: Path):
     script = Path(tempfile.mkdtemp(prefix="cu-update-")) / "install.sh"
     script.write_text(f'''#!/bin/zsh
 while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.3; done
-MNT=$(hdiutil attach -nobrowse -readonly -noautoopen "{dmg}" | awk -F'\\t' '/Apple_HFS/ {{print $NF}}')
+MNT=$(mktemp -d /tmp/cu-update-mnt.XXXX)
+# Fixed mount point: hdiutil's output mixes in checksum lines, and the volume name may already be taken.
+hdiutil attach -nobrowse -readonly -noautoopen -noverify -mountpoint "$MNT" "{dmg}" >/dev/null
 if [ -d "$MNT/Computer Use.app" ]; then
   rm -rf "{app}.new"
   ditto "$MNT/Computer Use.app" "{app}.new" && rm -rf "{app}" && mv "{app}.new" "{app}"
