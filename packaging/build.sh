@@ -1,9 +1,11 @@
 #!/bin/zsh
-# Build "Computer Use.app" and "Computer Use.dmg" into dist/.
+# Build "Computer Use.app" and put "Computer Use <version>.dmg" next to the project folder.
 # The build runs outside ~/Documents: iCloud/Finder attach extended attributes there, which codesign rejects.
 set -e
 cd "${0:A:h}/.."
 OUT=$(mktemp -d /tmp/cu-build.XXXX)
+VERSION=$(uv run python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+DMG="../Computer Use $VERSION.dmg"
 uv run pyinstaller --noconfirm --windowed --name "Computer Use" \
   --distpath "$OUT/dist" --workpath "$OUT/work" --specpath "$OUT" \
   --icon "$PWD/packaging/AppIcon.icns" \
@@ -19,13 +21,12 @@ APP="$OUT/dist/Computer Use.app"
 PL="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PL"
 /usr/libexec/PlistBuddy -c "Add :NSAppleEventsUsageDescription string 'Computer Use controls other apps to carry out your tasks.'" "$PL"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(uv run python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" "$PL"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PL"
 xattr -cr "$APP"
 codesign --force --deep --sign - "$APP"   # ad-hoc signature so macOS can remember permissions
 codesign --verify --deep "$APP"
 
 # --- DMG: logo on the file and the disk, background with an arrow, icons laid out ---
-mkdir -p dist
 VOL="Computer Use"
 RW="$OUT/rw.dmg"
 hdiutil create -size 200m -fs HFS+ -volname "$VOL" -ov "$RW" >/dev/null
@@ -60,14 +61,15 @@ OSA
 chmod -Rf go-w "$MNT" 2>/dev/null || true
 sync
 hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
-hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -ov -o "dist/Computer Use.dmg" >/dev/null
+rm -f ../"Computer Use "*.dmg ../"Computer Use.dmg"   # keep only the newest installer at the top
+hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG" >/dev/null
 
 # Logo on the .dmg file itself in Finder (stored as a Finder attribute, so it shows on this Mac).
-uv run python - "dist/Computer Use.dmg" <<'PY'
+uv run python - "$DMG" <<'PY'
 import sys
 from AppKit import NSImage, NSWorkspace
 NSWorkspace.sharedWorkspace().setIcon_forFile_options_(NSImage.alloc().initWithContentsOfFile_("packaging/AppIcon.icns"), sys.argv[1], 0)
 PY
 
-du -sh "$APP" "dist/Computer Use.dmg"
+du -sh "$APP" "$DMG"
 echo "app: $APP"

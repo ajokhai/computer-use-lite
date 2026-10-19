@@ -3,7 +3,7 @@
 Cowork-style control of the whole Mac, not just a browser. It runs from the menu bar, and every API key is optional.
 
 ## Install
-1. Open `dist/Computer Use.dmg` and drag **Computer Use** into Applications.
+1. Open `Computer Use <version>.dmg` (next to this Project folder) and drag **Computer Use** into Applications.
 2. Open it. A cursor icon appears in the menu bar; there's no Dock icon and no window.
 3. Go to **Settings › Grant Accessibility…** and **Grant Screen Recording…**, then add Computer Use.
 4. Optional: **Settings › API Keys…** (they're stored in the macOS Keychain) and **Settings › Open at Login**.
@@ -33,4 +33,4 @@ Clicks on send/buy/delete-style buttons ask first, unless you untick that. To ab
 
 ## Development
 - `uv run python -m cu "task"` (CLI), `uv run python -m cu --doctor`, `uv run python -m cu --elements`
-- `./packaging/build.sh` builds the app and the DMG into `dist/`.
+- `./packaging/build.sh` builds the app and writes `Computer Use <version>.dmg` next to the Project folder, replacing the previous one.
