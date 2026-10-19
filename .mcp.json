@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "computer-use-lite": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/Josh/Documents/Computer Use", "python", "-m", "cu.mcp_server"]
+    }
+  }
+}

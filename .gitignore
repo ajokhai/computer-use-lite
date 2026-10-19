@@ -1,0 +1,8 @@
+.env
+.venv
+__pycache__
+dist/
+build/
+*.spec
+packaging/AppIcon.iconset/
+.DS_Store

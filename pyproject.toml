@@ -1,0 +1,27 @@
+[project]
+name = "cu"
+version = "0.1.0"
+description = "Lite macOS computer-use harness: Gemini plans, Jev acts"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai>=2.31.0",
+    "httpx>=0.28.1",
+    "mcp>=2.3.0",
+    "pillow>=13.0.0",
+    "pyautogui>=0.9.54",
+    "pyobjc-framework-applicationservices>=12.2.2",
+    "pyobjc-framework-cocoa>=12.2.2",
+    "pyobjc-framework-quartz>=12.2.2",
+    "python-dotenv>=1.2.4",
+    "rumps>=0.4.0",
+]
+
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+]

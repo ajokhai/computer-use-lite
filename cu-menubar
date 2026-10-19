@@ -1,0 +1,3 @@
+#!/bin/zsh
+# Start the Computer Use menu bar app (detached, survives closing the terminal).
+cd "${0:A:h}" && nohup uv run python -m cu.menubar >/dev/null 2>&1 &
