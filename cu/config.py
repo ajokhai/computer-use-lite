@@ -17,6 +17,8 @@ DEFAULTS = {
     "confirm_all": False,
     "allow_risky": False,
     "auto_switch": True,
+    "auto_update": True,  # install new releases when idle
+    "last_version": "",
     "hands_free": False,  # always listening for "Computer, …"
     "speak_replies": True,
     "narrate": False,  # talk through each step while working

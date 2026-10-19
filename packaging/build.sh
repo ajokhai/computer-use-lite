@@ -5,7 +5,11 @@
 set -e
 cd "${0:A:h}/.."
 OUT=$(mktemp -d /tmp/cu-build.XXXX)
-VERSION=$(uv run python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+# Sign with the local "Computer Use Local Signing" certificate when present: its identity stays the same across
+# builds, so macOS keeps Accessibility/Screen Recording permissions after updates. Otherwise sign ad hoc.
+SIGN=$(security find-certificate -c "Computer Use Local Signing" -Z 2>/dev/null | awk '/SHA-1/ {print $NF; exit}')
+SIGN=${SIGN:--}
+VERSION=$(uv run python -c 'import cu;print(cu.__version__)')  # the single source of truth is cu/__init__.py
 DMG="../Computer Use $VERSION.dmg"
 uv run pyinstaller --noconfirm --windowed --name "Computer Use" \
   --distpath "$OUT/dist" --workpath "$OUT/work" --specpath "$OUT" \
@@ -35,7 +39,7 @@ uv run pyinstaller --noconfirm --console --name cu-voice \
   --exclude-module google.genai --exclude-module mcp --exclude-module rumps --exclude-module pyautogui \
   packaging/voice_launcher.py
 xattr -cr "$OUT/pack/cu-voice"
-codesign --force --deep --sign - "$OUT/pack/cu-voice/cu-voice"
+codesign --force --deep --sign "$SIGN" "$OUT/pack/cu-voice/cu-voice"
 rm -f ../"Computer Use Voice Pack"*.zip(N)
 ditto -c -k --keepParent "$OUT/pack/cu-voice" "../Computer Use Voice Pack $VERSION.zip"
 
@@ -47,7 +51,7 @@ PL="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Computer Use listens when you talk to it (⌃⌥Space or hands-free).'" "$PL"
 /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Your speech is turned into tasks on this Mac.'" "$PL"
 xattr -cr "$APP"
-codesign --force --deep --sign - "$APP"   # ad-hoc signature so macOS can remember permissions
+codesign --force --deep --sign "$SIGN" "$APP"
 codesign --verify --deep "$APP"
 
 # --- DMG: logo on the file and the disk, background with an arrow, icons laid out ---

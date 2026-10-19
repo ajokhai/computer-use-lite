@@ -9,7 +9,7 @@ import rumps
 from AppKit import (NSApplication, NSEvent, NSEventMaskKeyDown, NSEventModifierFlagControl,
                     NSEventModifierFlagOption, NSImage, NSWorkspace)
 
-from . import integration, say, usage, voicepack
+from . import __version__, integration, say, updater, usage, voicepack
 from .config import KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
 
 IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "exclamationmark.triangle"
@@ -62,6 +62,10 @@ class MenuBar(rumps.App):
 
         settings_menu = rumps.MenuItem("Settings")
         self.pack_item = rumps.MenuItem("Install Voice Pack…", callback=self.toggle_pack)
+        self.update_item = rumps.MenuItem("Check for Updates…", callback=lambda _: self.check_updates(manual=True))
+        self.auto_update_item = rumps.MenuItem("Update automatically", callback=self.toggle_auto_update)
+        self.update_info = None
+        self.update_ready = None
         self.login = rumps.MenuItem("Open at Login", callback=self.toggle_login)
         connect_menu = rumps.MenuItem("Connect to")
         self.clients = {name: rumps.MenuItem(name, callback=lambda _, n=name: self.toggle_client(n))
@@ -79,6 +83,10 @@ class MenuBar(rumps.App):
             rumps.MenuItem("Grant Screen Recording…", callback=lambda _: integration.open_privacy_settings("ScreenCapture")),
             None,
             rumps.MenuItem("Open Log", callback=lambda _: _open(LOG)),
+            None,
+            self.update_item,
+            self.auto_update_item,
+            rumps.MenuItem(f"Version {__version__}", callback=None),
         ):
             settings_menu.add(item) if item is not None else settings_menu.add(rumps.separator)
 
@@ -100,6 +108,8 @@ class MenuBar(rumps.App):
         self.refresh_usage()
         rumps.Timer(self.pump, 0.15).start()
         rumps.Timer(lambda _: self.refresh_usage(), 30).start()
+        rumps.Timer(lambda _: self.check_updates(), 6 * 3600).start()
+        rumps.Timer(self._first_update_check, 8).start()
         rumps.Timer(self._first_paint, 0.05).start()
         self._install_hotkey()
 
@@ -130,6 +140,7 @@ class MenuBar(rumps.App):
         self.pack_item.set_callback(None if (has_pack and not voicepack.HELPER.exists()) else self.toggle_pack)
         for key, item in self.toggles.items():
             item.state = self.settings[key]
+        self.auto_update_item.state = self.settings["auto_update"]
         running = self.agent is not None
         self.new.set_callback(None if running else self.new_task)
         self.stop_item.set_callback(self.stop if running else None)
@@ -191,6 +202,92 @@ class MenuBar(rumps.App):
 
     def quit(self, _):
         self._drop_listener()
+        rumps.quit_application()
+
+    # --- updates -------------------------------------------------------------
+
+    def _first_update_check(self, timer):
+        timer.stop()
+        if self.settings.get("last_version") not in ("", __version__):
+            rumps.notification("Computer Use", f"Updated to {__version__}", "")
+        if self.settings.get("last_version") != __version__:
+            self.settings["last_version"] = __version__
+            save_settings(self.settings)
+        self.check_updates()
+
+    def toggle_auto_update(self, _):
+        self.settings["auto_update"] = not self.settings["auto_update"]
+        save_settings(self.settings)
+        self.refresh()
+
+    def check_updates(self, manual: bool = False):
+        if self.update_info and manual:
+            return self.start_update()
+
+        def run():
+            try:
+                self.events.put(("update", (updater.check(), manual, None)))
+            except Exception as e:
+                self.events.put(("update", (None, manual, str(e))))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_update_checked(self, info, manual, error):
+        if error:
+            if manual:
+                rumps.alert("Check for Updates", f"Couldn't reach GitHub: {error}")
+            return
+        if info is None:
+            if manual:
+                rumps.alert("Check for Updates", f"You're up to date (version {__version__}).")
+            return
+        self.update_info = info
+        self.update_item.title = f"Install Update {info['version']}…"
+        if self.settings["auto_update"] and updater.running_bundle():
+            self.start_update()
+        else:
+            rumps.notification("Computer Use", f"Update {info['version']} available", "Settings › Install Update")
+            if manual:
+                self.start_update()
+
+    def start_update(self):
+        info = self.update_info
+        if not info or getattr(self, "_updating", False):
+            return
+        if updater.running_bundle() is None:
+            rumps.alert("Update", "Updates install into the packaged app. Running from source: use git pull.")
+            return
+        self._updating = True
+        self.update_item.title = f"Downloading {info['version']}…"
+
+        def run():
+            try:
+                dmg = updater.download(info["dmg"], lambda f: self.events.put(
+                    ("update_progress", f"Downloading update… {int(f * 100)}%")))
+                pack = None
+                if info.get("pack") and voicepack.HELPER.exists():
+                    pack = updater.download(info["pack"], lambda f: self.events.put(
+                        ("update_progress", f"Downloading Voice Pack… {int(f * 100)}%")))
+                self.events.put(("update_ready", (dmg, pack)))
+            except Exception as e:
+                self.events.put(("update_failed", str(e)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def finish_update(self):
+        """Install once nothing is running: swap the app, update the Voice Pack, relaunch."""
+        if self.update_ready is None or self.agent is not None:
+            return
+        dmg, pack = self.update_ready
+        self.update_ready = None
+        self._drop_listener()
+        try:
+            if pack:
+                voicepack.install(pack)
+        except Exception:
+            pass  # the app update matters more; the pack can be reinstalled
+        rumps.notification("Computer Use", f"Installing {self.update_info['version']}", "Back in a moment.")
+        updater.install_and_relaunch(dmg, updater.running_bundle())
         rumps.quit_application()
 
     def clear_flags(self, _):
@@ -558,6 +655,25 @@ class MenuBar(rumps.App):
             if kind == "talk":
                 self.talk_now()
                 continue
+            if kind == "update":
+                self.on_update_checked(*payload)
+                continue
+            if kind == "update_progress":
+                self.update_item.title = payload
+                if self.agent is None:
+                    self.status.title = payload
+                continue
+            if kind == "update_failed":
+                self._updating = False
+                self.update_item.title = f"Install Update {self.update_info['version']}…"
+                self.status.title = "Idle" if self.agent is None else self.status.title
+                rumps.notification("Computer Use", "Update failed", payload)
+                continue
+            if kind == "update_ready":
+                self.update_ready = payload
+                self.update_item.title = "Installing when idle…"
+                self.finish_update()
+                continue
             if kind == "narrate":
                 say.speak(payload, self.settings.get("speaking_voice"), interrupt=False)
                 continue
@@ -606,6 +722,8 @@ class MenuBar(rumps.App):
                     task, self.pending = self.pending, None
                     self.start(task)
                     continue
+                if self.update_ready:
+                    self.finish_update()
                 if self.voice_task:
                     self.say(_spoken(payload))
                     self.voice_task = False

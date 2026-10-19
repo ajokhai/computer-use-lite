@@ -60,9 +60,22 @@ Picking a voice plays a short preview.
 - When a provider replies "out of quota", the model is marked as out until it resets.
 - **Switch models automatically when one runs out:** steps down the Gemini models (3.8 Flash → 3.5 Flash-Lite → 3 Flash preview), and moves between Jev and Gemini, carrying on from the current screen.
 
+## Updates
+- The app checks GitHub Releases at launch and every 6 hours.
+- With **Settings › Update automatically** on (the default), it downloads a new version and installs it once no task is running. It replaces itself in Applications, updates the Voice Pack if you have it, and relaunches.
+- **Settings › Check for Updates…** checks right away. It becomes **Install Update X…** when an update is waiting.
+- While the repo is private, the app downloads using your `gh` login (or a `GITHUB_TOKEN` in the Keychain).
+- **Permissions:** builds are signed with a local certificate, "Computer Use Local Signing", so macOS keeps the Accessibility and Screen Recording permissions across updates. You only re-grant them once, after switching from an older ad-hoc-signed build.
+
+**Publishing an update:**
+1. Bump `__version__` in `cu/__init__.py`.
+2. Commit.
+3. Run `./packaging/release.sh "What changed"`. It builds, pushes, and creates the GitHub release with the DMG and Voice Pack attached.
+
 ## Safety
 Clicks on send/buy/delete-style buttons ask first, unless you untick that. To abort, move the mouse hard into any screen corner, or use Stop. The log is at `~/Library/Logs/computer-use.log`.
 
 ## Development
 - `uv run python -m cu "task"` (CLI), `uv run python -m cu --doctor`, `uv run python -m cu --elements`
-- `./packaging/build.sh` builds the app and writes `Computer Use <version>.dmg` next to the Project folder, replacing the previous one.
+- `./packaging/build.sh` builds the app and writes `Computer Use <version>.dmg` and the Voice Pack next to the Project folder, replacing the previous ones.
+- `./packaging/release.sh "notes"` publishes a release for the updater.
