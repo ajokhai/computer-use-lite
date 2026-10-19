@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -47,8 +48,13 @@ def _parse(v: str) -> tuple:
 
 def check() -> dict | None:
     """The latest release if it's newer than this app, else None."""
-    with _request(API) as r:
-        rel = json.load(r)
+    try:
+        with _request(API) as r:
+            rel = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None  # no releases yet
+        raise
     version = rel.get("tag_name", "").lstrip("v")
     if not version or _parse(version) <= _parse(__version__):
         return None
