@@ -26,11 +26,14 @@ def key_name(k: str) -> str:
 
 def move_to(x, y, duration=0.12):
     """Smoothly glide the cursor across the screen so the user can follow along."""
+    from . import indicator
     from .screen import _load_native_lib
+    indicator.show_cursor_active(x, y)
     lib = _load_native_lib()
     if lib and hasattr(lib, "cu_move_to"):
         try:
             lib.cu_move_to(float(x), float(y), float(duration * 1000.0))
+            indicator.show_cursor_active(x, y)
             return
         except Exception:
             pass
@@ -38,6 +41,7 @@ def move_to(x, y, duration=0.12):
         pyautogui.moveTo(x, y, duration=duration, tween=pyautogui.easeOutQuad)
     except Exception:
         pyautogui.moveTo(x, y)
+    indicator.show_cursor_active(x, y)
 
 
 def click(x, y, button="left", clicks=1):
@@ -45,6 +49,7 @@ def click(x, y, button="left", clicks=1):
     from .screen import _load_native_lib
     move_to(x, y, duration=0.10)
     indicator.show_click_ring(x, y)
+    indicator.hide_cursor_active(delay=0.45)
     lib = _load_native_lib()
     if lib and hasattr(lib, "cu_click"):
         try:
@@ -166,20 +171,24 @@ def scroll(x, y, direction="down", amount=300):
     from .screen import _load_native_lib
     move_to(x, y, duration=0.08)
     indicator.show_click_ring(x, y)
+    indicator.show_cursor_active(x, y)
     lines = max(1, int(amount / 10))
-    lib = _load_native_lib()
-    if lib and hasattr(lib, "cu_scroll"):
-        try:
-            dy = lines if direction == "up" else (-lines if direction == "down" else 0)
-            dx = lines if direction == "right" else (-lines if direction == "left" else 0)
-            lib.cu_scroll(dy, dx)
-            return
-        except Exception:
-            pass
-    if direction in ("up", "down"):
-        pyautogui.scroll(lines if direction == "up" else -lines)
-    else:
-        pyautogui.hscroll(lines if direction == "right" else -lines)
+    try:
+        lib = _load_native_lib()
+        if lib and hasattr(lib, "cu_scroll"):
+            try:
+                dy = lines if direction == "up" else (-lines if direction == "down" else 0)
+                dx = lines if direction == "right" else (-lines if direction == "left" else 0)
+                lib.cu_scroll(dy, dx)
+                return
+            except Exception:
+                pass
+        if direction in ("up", "down"):
+            pyautogui.scroll(lines if direction == "up" else -lines)
+        else:
+            pyautogui.hscroll(lines if direction == "right" else -lines)
+    finally:
+        indicator.hide_cursor_active(delay=0.45)
 
 
 def drag(x1, y1, x2, y2):
@@ -187,14 +196,20 @@ def drag(x1, y1, x2, y2):
     from .screen import _load_native_lib
     move_to(x1, y1, duration=0.08)
     indicator.show_click_ring(x1, y1)
-    lib = _load_native_lib()
-    if lib and hasattr(lib, "cu_drag"):
-        try:
-            lib.cu_drag(float(x1), float(y1), float(x2), float(y2), 250.0)
-            return
-        except Exception:
-            pass
-    pyautogui.dragTo(x2, y2, duration=0.25, button="left")
+    indicator.show_cursor_active(x1, y1)
+    try:
+        lib = _load_native_lib()
+        if lib and hasattr(lib, "cu_drag"):
+            try:
+                lib.cu_drag(float(x1), float(y1), float(x2), float(y2), 250.0)
+                indicator.show_cursor_active(x2, y2)
+                return
+            except Exception:
+                pass
+        pyautogui.dragTo(x2, y2, duration=0.25, button="left")
+        indicator.show_cursor_active(x2, y2)
+    finally:
+        indicator.hide_cursor_active(delay=0.45)
 
 
 def open_app(name: str) -> bool:

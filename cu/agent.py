@@ -539,6 +539,11 @@ class Agent:
         return ok, f"({msg})"
 
     def _report(self, msg: str) -> str:
+        try:
+            from . import indicator
+            indicator.hide_cursor_active(delay=0.1)
+        except Exception:
+            pass
         g = self.gemini
         lines = [msg, f"mode: {self.mode}, steps: {self.stats}"]
         if g:

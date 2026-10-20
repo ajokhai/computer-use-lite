@@ -127,8 +127,13 @@ def _load_native_lib():
     candidates = [
         Path(__file__).resolve().parent.parent / "crates" / "cu-native" / "target" / "release" / "libcu_native.dylib",
     ]
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        candidates.insert(0, Path(sys._MEIPASS) / "libcu_native.dylib")
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            candidates.insert(0, Path(sys._MEIPASS) / "libcu_native.dylib")
+        exe = Path(sys.executable)
+        candidates.append(exe.parent / "libcu_native.dylib")
+        candidates.append(exe.parent.parent / "Frameworks" / "libcu_native.dylib")
+        candidates.append(exe.parent.parent / "Resources" / "libcu_native.dylib")
 
     for candidate in candidates:
         if candidate.is_file():
