@@ -45,14 +45,40 @@ def paste():
     time.sleep(0.08)
 
 
-def screenshot_to_clipboard(rect=None):
-    """Capture the screen or a region and copy it directly to the clipboard."""
-    cmd = ["screencapture", "-c"]
+def copy_image_to_clipboard(path: str = "/tmp/cu_screenshot.png") -> bool:
+    """Put image data onto the general pasteboard via Cocoa."""
+    try:
+        from Cocoa import NSPasteboard, NSImage, NSURL
+        url = NSURL.fileURLWithPath_(str(path))
+        img = NSImage.alloc().initWithContentsOfURL_(url)
+        if img:
+            pb = NSPasteboard.generalPasteboard()
+            pb.clearContents()
+            pb.writeObjects_([img])
+            time.sleep(0.08)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def screenshot_to_clipboard(rect=None, path: str = "/tmp/cu_screenshot.png"):
+    """Capture the screen or a region to disk, then put image data onto the clipboard."""
+    cmd = ["screencapture", "-x"]
     if rect:
         x, y, w, h = rect
         cmd.append(f"-R{x},{y},{w},{h}")
+    cmd.append(path)
     subprocess.run(cmd, check=True)
+    copy_image_to_clipboard(path)
     time.sleep(0.1)
+
+
+def paste_image(path: str = "/tmp/cu_screenshot.png"):
+    """Ensure the image is freshly placed on the pasteboard, then paste."""
+    copy_image_to_clipboard(path)
+    pyautogui.hotkey("command", "v")
+    time.sleep(0.15)
 
 
 def type_text(text: str, press_enter=False, clear=False):
