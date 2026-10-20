@@ -29,6 +29,10 @@ OPS = {
     "SCROLL_UP": "Scroll up.",
     "OPEN_APP": "Launch or switch to an application; the needed app is not the frontmost app.",
     "PASTE": "Paste the clipboard content (press Command-V) into the active note, document, or field.",
+    "COPY": "Copy the current selection or link to clipboard (press Command-C).",
+    "SELECT_ALL": "Select all text or content in the current field/window (press Command-A).",
+    "CLOSE_WINDOW": "Close the frontmost window or tab when finished with it (press Command-W).",
+    "QUIT_APP": "Quit the current application when its task is complete (press Command-Q).",
     "SCREENSHOT": "Take a screenshot of the current screen/window and copy it to the clipboard.",
     "WAIT": "Wait for something to finish loading.",
     "DONE": "The task is fully complete; nothing left to do.",
@@ -41,14 +45,23 @@ class Jev:
         key = api_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")
         if not key:
             raise RuntimeError("Set TYPESAFE_API_KEY to use Jev")
-        self.http = httpx.Client(timeout=30, headers={"Authorization": f"Bearer {key}"})
+        self.http = httpx.Client(
+            timeout=30,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "TypeSafe-Danger-Zone-Images": "true",
+            },
+        )
         self.input_tokens = 0
 
-    def ask(self, state, questions: dict) -> dict:
+    def ask(self, state, questions: dict, assets: dict | None = None, model: str | None = None) -> dict:
         s = usage.status("jev")
         if not s["available"]:
             raise usage.QuotaExhausted("jev", s["blocked_until"])
-        body = {"model": MODEL, "state": state, "questions": questions}
+        chosen_model = model or ("jev-preview" if assets or any(q.get("type") == "box" for q in questions.values()) else MODEL)
+        body = {"model": chosen_model, "state": state, "questions": questions}
+        if assets:
+            body["assets"] = assets
         for attempt in range(4):
             r = self.http.post(URL, json=body)
             if r.status_code in (429, 529):
@@ -65,6 +78,78 @@ class Jev:
             return data["answers"]
         usage.mark_exhausted("jev", time.time() + 60)
         raise usage.QuotaExhausted("jev", time.time() + 60, "rate limited")
+
+    def locate(self, target_description: str, png_bytes: bytes | None = None) -> tuple[tuple[int, int, int, int] | None, float]:
+        """Locate the bounding box of a target visually in a screenshot using Jev Box primitive.
+        Returns ((center_x, center_y, width, height), confidence)."""
+        import base64
+        import io
+        from PIL import Image
+        from .screen import screenshot_png, screen_size
+
+        if png_bytes is None:
+            png_bytes = screenshot_png(max_width=1440)
+
+        im = Image.open(io.BytesIO(png_bytes))
+        img_w, img_h = im.size
+        sw, sh = screen_size()
+        scale_x = sw / img_w
+        scale_y = sh / img_h
+
+        b64 = base64.b64encode(png_bytes).decode("utf-8")
+        state = {"screen": "asset-screen"}
+        assets = {"asset-screen": {"type": "image", "format": "png", "data_base64": b64}}
+        questions = {
+            "target": {
+                "type": "box",
+                "instructions": f"the {target_description} in `screen`",
+            }
+        }
+        try:
+            answers = self.ask(state, questions, assets=assets, model="jev-preview")
+            res = answers.get("target", {})
+            box = res.get("box")
+            conf = float(res.get("confidence", 0.0))
+            if box and conf >= 0.1:
+                top = float(box["top"])
+                bottom = float(box["bottom"])
+                left = float(box["left"])
+                right = float(box["right"])
+
+                x1 = left * img_w * scale_x
+                x2 = right * img_w * scale_x
+                y1 = top * img_h * scale_y
+                y2 = bottom * img_h * scale_y
+
+                cx = int((x1 + x2) / 2)
+                cy = int((y1 + y2) / 2)
+                w = int(x2 - x1)
+                h = int(y2 - y1)
+                return (cx, cy, w, h), conf
+        except Exception:
+            pass
+        return None, 0.0
+
+    def visual_check(self, claim: str, png_bytes: bytes | None = None) -> float:
+        """Check whether a claim is visually true on screen using Jev Noul primitive on a screenshot."""
+        import base64
+        from .screen import screenshot_png
+        if png_bytes is None:
+            png_bytes = screenshot_png(max_width=1000)
+        b64 = base64.b64encode(png_bytes).decode("utf-8")
+        state = {"screen": "asset-screen"}
+        assets = {"asset-screen": {"type": "image", "format": "png", "data_base64": b64}}
+        questions = {
+            "check": {
+                "type": "noul",
+                "instructions": f"Is this claim visually true of `screen`? {claim}",
+            }
+        }
+        try:
+            answers = self.ask(state, questions, assets=assets, model="jev-preview")
+            return float(answers.get("check", {}).get("noul", 0.0))
+        except Exception:
+            return 0.5
 
     def ground(self, step: dict, app: str, elements: list[Element]) -> tuple[Element | None, float]:
         """Pick the element a step refers to. Returns (element or None, probability)."""
@@ -97,40 +182,77 @@ class Jev:
             return None, prob
         return next((e for e in elements if e.id == pick), None), prob
 
-    def check(self, expect: str, app: str, elements: list[Element]) -> float:
-        """Probability that the expected outcome is visible in the AX tree."""
+    def check(self, task: str, app: str, elements: list[Element], history: list[str] | None = None,
+              clipboard: str | None = None) -> float:
+        """Probability that the task has been achieved given the execution history and current screen state."""
+        import subprocess
+        if clipboard is None:
+            try:
+                clipboard = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=0.5).stdout.strip()
+            except Exception:
+                clipboard = ""
         state = {
+            "task": task,
             "frontmost_app": app,
-            "elements": [e.describe() for e in elements[:200]],
+            "actions_completed": history[-10:] if history else [],
+            "elements": [e.describe() for e in elements[:160]],
+            "clipboard_content": clipboard[:300] if clipboard else "(empty)",
         }
         answers = self.ask(state, {
-            "ok": {"type": "noul", "instructions": f"Is this true of the current screen? {expect}"}
+            "ok": {
+                "type": "noul",
+                "instructions": (
+                    "Given the actions already executed and the current application state, "
+                    f"has this task been successfully accomplished? Task: '{task}'"
+                ),
+            }
         })
         return float(answers["ok"]["noul"])
 
     def decide(self, task: str, app: str, elements: list[Element], history: list[str],
-               texts: list[str], apps: list[str]) -> dict:
+               texts: list[str], apps: list[str], tried: list[str] | None = None) -> dict:
         """One request: the most probable next operation, its target, what to type, which app."""
+        import subprocess
         elements = elements[: MAX_OPTIONS - 2]
         focused = next((e.describe() for e in elements if e.focused), "nothing")
+        try:
+            clipboard = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=0.5).stdout.strip()
+        except Exception:
+            clipboard = ""
+
+        # Filter out actions that cannot be executed in this state (anti-stall pattern)
+        active_ops = dict(OPS)
+        if not clipboard or clipboard == "(empty)":
+            active_ops.pop("PASTE", None)
+        if not texts:
+            active_ops.pop("TYPE", None)
+
         state = {
             "task": task,
             "frontmost_app": app,
             "focused_element": focused,
+            "clipboard_content": clipboard[:300] if clipboard else "(empty)",
             "actions_so_far": history[-10:] or ["none yet"],
+            "already_tried_on_this_screen": list(tried or []),
         }
         targets = {e.id: e.describe() for e in elements}
         targets[NOT_FOUND] = "None of these; no element is needed or the right one is not listed."
         questions = {
             "op": {
                 "type": "choice",
-                "instructions": ("What is the single most sensible next action to make progress on the task, "
-                                 "given the actions already taken? Don't repeat an action that already succeeded."),
-                "criteria": OPS,
+                "instructions": (
+                    "What is the single most sensible next action to make progress on the task, "
+                    "given the actions already taken? Do not repeat an action that was just taken, "
+                    "and NEVER pick an action listed in 'already_tried_on_this_screen': each of those led straight back here."
+                ),
+                "criteria": active_ops,
             },
             "target": {
                 "type": "choice",
-                "instructions": "Which on-screen element should the next action be performed on?",
+                "instructions": (
+                    "Which on-screen element should the next action be performed on? "
+                    "Do not pick an element if clicking it was already tried on this screen without changing state."
+                ),
                 "criteria": targets,
             },
             "text": {
@@ -153,8 +275,8 @@ class Jev:
             "op_p": prob("op"),
             "element": next((e for e in elements if e.id == pick), None),
             "target_p": prob("target"),
-            "text": texts[int(a["text"]["choice"][1:])],
-            "app": apps[int(a["app"]["choice"][1:])] if apps else "",
+            "text": texts[int(a["text"]["choice"][1:])] if texts and "text" in a and a["text"]["choice"].startswith("t") else (texts[0] if texts else ""),
+            "app": apps[int(a["app"]["choice"][1:])] if apps and "app" in a and a["app"]["choice"].startswith("a") else "",
         }
 
     @property
@@ -177,17 +299,25 @@ def text_candidates(task: str, limit: int = 60) -> list[str]:
         except Exception:
             pass
 
-    out = [m for pair in re.findall(r'"([^"]+)"|\u201c([^\u201d]+)\u201d|\'([^\']{2,})\'', task) for m in pair if m]
+    # 0. URLs and domains (highest priority for browser/navigation tasks)
+    urls = re.findall(r'https?://[^\s,;"\']+|www\.[^\s,;"\']+|\b[a-zA-Z0-9-]+\.(?:com|org|net|io|ai|dev|co|edu|gov|xyz)(?:/[^\s,;"\']*)?', task)
+    out = list(urls)
+    out += [m for pair in re.findall(r'"([^"]+)"|\u201c([^\u201d]+)\u201d|\'([^\']{2,})\'', task) for m in pair if m]
     for verb in ("type", "write", "enter", "search for", "search", "look up", "find", "named", "called",
                  "titled", "saying", "that says", "to say", "message", "subject", "note", "to", "for", "about",
-                 "calculate", "compute", "solve", "math", "evaluate"):
+                 "calculate", "compute", "solve", "math", "evaluate", "with", "recipient", "contact",
+                 "chat with", "send to", "stating", "comment", "tweet", "open", "visit", "go to"):
         out += [m.strip(" .") for m in re.findall(rf"\b{verb}\b[:\s]+(.+?)(?=$|[.;]| and then | then )", task, re.I)]
     out += re.findall(r"[\d\.\,]+(?:\s*[\+\-\*\/\=\%]\s*[\d\.\,]+)+", task)
     out += re.findall(r"\b\d+\b", task)
-    out += re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+|https?://\S+|\b[\w-]+\.(?:com|org|net|io|ai|dev|co)\S*", task)
-    if ":" in task:
-        out.append(task.split(":", 1)[1].strip(" ."))
-    out += [p.strip(" .") for p in re.split(r"[,;:]| and | then ", task)]
+    out += re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", task)
+
+    # Protect '://' when splitting clauses
+    task_safe = re.sub(r'https?://', '___PROTO___', task)
+    for p in re.split(r"[,;:]| and | then ", task_safe):
+        restored = p.replace('___PROTO___', 'https://').strip(" .")
+        if restored:
+            out.append(restored)
     out.append(task.strip())
     seen, uniq = set(), []
     for t in out:

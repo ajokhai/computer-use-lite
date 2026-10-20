@@ -32,9 +32,10 @@ def jev_op(op: str, element_label: str = "", text: str = "", app: str = "") -> s
         "PRESS_ESCAPE": "Closing that",
         "PRESS_TAB": "",
         "NEW_ITEM": "Making a new one",
-        "SCROLL_DOWN": "Scrolling down",
-        "SCROLL_UP": "Scrolling up",
-        "OPEN_APP": f"Opening {app}",
+        "COPY": "Copying to clipboard",
+        "SELECT_ALL": "Selecting all",
+        "CLOSE_WINDOW": "Closing window",
+        "QUIT_APP": f"Quitting {app}" if app else "Quitting app",
         "WAIT": "",
     }.get(op, "")
 

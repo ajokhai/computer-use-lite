@@ -462,12 +462,26 @@ pub fn extract_text_candidates(task: &str, limit: usize) -> Vec<String> {
         i += 1;
     }
 
+    // 0. URLs and web addresses (highest priority for browser/navigation tasks)
+    for w in task.split_whitespace() {
+        let clean = w.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';' || c == '(' || c == ')');
+        if clean.starts_with("http://") || clean.starts_with("https://") || clean.starts_with("www.") {
+            out.push(clean.to_string());
+        } else if clean.contains('.') && !clean.ends_with('.') && !clean.starts_with('.') {
+            let tlds = [".com", ".org", ".net", ".io", ".ai", ".dev", ".co", ".edu", ".gov", ".xyz"];
+            if tlds.iter().any(|tld| clean.to_lowercase().contains(tld)) {
+                out.push(clean.to_string());
+            }
+        }
+    }
+
     // 2. Verb prefixes
     let verbs = [
         "type", "write", "enter", "search for", "search", "look up", "find",
         "named", "called", "titled", "saying", "that says", "to say", "message",
         "subject", "note", "to", "for", "about", "calculate", "compute", "solve",
-        "math", "evaluate",
+        "math", "evaluate", "with", "recipient", "contact", "chat with", "send to",
+        "stating", "comment", "tweet", "open", "visit", "go to",
     ];
 
     let task_lower = task.to_lowercase();
@@ -528,9 +542,11 @@ pub fn extract_text_candidates(task: &str, limit: usize) -> Vec<String> {
         }
     }
 
-    // 5. Clauses split by ',' or ';'
-    for part in task.split(&[',', ';', ':'][..]) {
-        let p = part.trim();
+    // 5. Clauses split by ',' or ';' or ':' (protecting '://' in URLs)
+    let task_safe_proto = task.replace("://", "___PROTO___");
+    for part in task_safe_proto.split(&[',', ';', ':'][..]) {
+        let restored = part.replace("___PROTO___", "://");
+        let p = restored.trim();
         if !p.is_empty() && p.len() <= 100 {
             out.push(p.to_string());
         }

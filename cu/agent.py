@@ -9,6 +9,7 @@ gemini  Gemini vision computer-use does everything.
 """
 
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -268,11 +269,12 @@ class Agent:
                     reason = data.get("reason", "")
                     if not verified:
                         return False, reason
-                    # If verified by native rule engine, run Jev check if available
-                    if self.jev and els:
+                    # If verified by native rule engine, run Jev check if available (skip for app quit/close tasks)
+                    close_verbs = ("quit", "close", "exit", "terminate", "kill")
+                    if self.jev and els and not any(v in task.lower() for v in close_verbs):
                         try:
-                            p = self.jev.check(f"Has this entire task been accomplished? Task: '{task}'", app, els)
-                            if p < 0.35:
+                            p = self.jev.check(task, app, els, history=history)
+                            if p < 0.20:
                                 return False, f"Jev verification confidence is low (p={p:.2f})"
                         except Exception:
                             pass
@@ -321,11 +323,18 @@ class Agent:
             if not has_input:
                 return False, "Objective requested creating or writing content, but no text input or document creation action was executed."
 
-        # 5. Jev verification check if available
-        if self.jev and els:
+        # App termination / closure verification
+        close_verbs = ("quit", "close", "exit", "terminate", "kill")
+        if any(v in words for v in close_verbs):
+            has_close = any(any(c in h.lower() for c in ("quit_app", "close_window", "quit", "close")) for h in history)
+            if has_close:
+                return True, "Target application or window has been closed."
+
+        # 5. Jev verification check if available (for tasks not involving closing an app)
+        if self.jev and els and not any(v in words for v in close_verbs):
             try:
-                p = self.jev.check(f"Has this entire task been accomplished? Task: '{task}'", app, els)
-                if p < 0.35:
+                p = self.jev.check(task, app, els, history=history)
+                if p < 0.20:
                     return False, f"Jev verification confidence is low (p={p:.2f})"
             except Exception:
                 pass
@@ -337,12 +346,18 @@ class Agent:
         texts, apps = text_candidates(task.split("\n(Continue", 1)[0]), installed_apps()
         history: list[str] = []
         recent: deque = deque(maxlen=3)
+        seen_screens: dict[str, list[str]] = {}
         misses = 0
         for _ in range(self.max_jev_actions):
             if self.stop.is_set():
                 return self._report("stopped by user")
             app, els = ax_elements(limit=253)
-            d = self.jev.decide(task, app, els, history, texts, apps)
+
+            # Screen signature for tracking actions tried on this exact screen
+            screen_sig = f"{app}:" + ",".join(f"{e.role}:{e.label[:12]}:{e.x // 25}:{e.y // 25}" for e in els[:15])
+            tried_here = seen_screens.get(screen_sig, [])
+
+            d = self.jev.decide(task, app, els, history, texts, apps, tried=tried_here)
             op, el = d["op"], d["element"]
             desc = _describe_op(d)
             self.log(f"  jev → {desc}  p={d['op_p']:.2f}")
@@ -353,6 +368,7 @@ class Agent:
                 if not ok_verified:
                     self.log(f"  [Self-Correction] Premature DONE rejected: {why}")
                     history.append(f"FAILED: Premature DONE rejected: {why}. Self-correct and complete the missing step.")
+                    seen_screens.setdefault(screen_sig, []).append("DONE")
                     misses = 0
                     continue
                 return self._report(f"done (verified; jev p={d['op_p']:.2f})")
@@ -372,8 +388,12 @@ class Agent:
             if not stuck:
                 stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)
 
-            if stuck or (self.gemini and d["op_p"] < 0.35):
-                if not self.gemini:
+            if stuck or (self.mode != "jev" and self.gemini and d["op_p"] < 0.35):
+                if self.mode == "jev" or not self.gemini or not _gemini_ok():
+                    # In Jev mode, do not fail over to Gemini; check if goal criteria are verified
+                    ok_verified, _ = self.verify_task_completion(task, app, els, history)
+                    if ok_verified:
+                        return self._report(f"done (criteria satisfied; jev p={d['op_p']:.2f})")
                     # Prompt user for guidance and learn from demonstration!
                     learned = prompt_user_for_help(task, app, f"Unsure how to proceed with '{desc}'", log_fn=self.log)
                     if learned:
@@ -381,7 +401,7 @@ class Agent:
                         recent.clear()
                         misses = 0
                         continue
-                    return self._report("blocked: Jev is stuck (add GEMINI_API_KEY to let Gemini take over)")
+                    return self._report("blocked: Jev is stuck on this step")
                 self.stats["gemini_steps"] += 1
                 ok, msg = self.gemini.act(f"Task: {task}\nDone so far: {history[-8:]}\nDo the next step or two, then stop.",
                                           max_turns=6, confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
@@ -390,9 +410,18 @@ class Agent:
                 misses = 0
                 continue
             if op in ("CLICK", "DOUBLE_CLICK", "TYPE") and el is None and not (op == "TYPE" and _focused(els)):
-                misses += 1
-                history.append(f"FAILED: {desc} (no matching element)")
-                continue
+                # If element wasn't found in AX tree, leverage Jev Box vision primitive on screenshot
+                target_desc = d.get("text") or task
+                pt, conf = self.jev.locate(target_desc) if self.jev else (None, 0.0)
+                if pt and conf >= 0.2:
+                    cx, cy, cw, ch = pt
+                    el = Element(id="visual_jev", role="AXVisual", label=target_desc, x=cx, y=cy, w=cw, h=ch)
+                    self.log(f"    jev box visual grounding → at ({cx}, {cy}) conf={conf:.2f}")
+                else:
+                    misses += 1
+                    history.append(f"FAILED: {desc} (no matching element)")
+                    seen_screens.setdefault(screen_sig, []).append(desc)
+                    continue
 
             label = (el.label if el else "").lower()
             if self.confirm_all or (op in ("CLICK", "DOUBLE_CLICK", "PRESS_ENTER") and not self.allow_risky
@@ -403,10 +432,12 @@ class Agent:
                 self._do_jev(op, d, el, task, els)
             except Exception as e:
                 history.append(f"FAILED: {desc} ({e})")
+                seen_screens.setdefault(screen_sig, []).append(desc)
                 misses += 1
                 continue
             self.stats["jev_steps"] += 1
             history.append(f"ok: {desc}")
+            seen_screens.setdefault(screen_sig, []).append(desc)
             recent.append(desc)
             time.sleep(0.08)
         return self._report("stopped: hit the action limit")
@@ -435,6 +466,14 @@ class Agent:
                 actions.paste_image("/tmp/cu_screenshot.png")
             else:
                 actions.paste()
+        elif op == "COPY":
+            actions.copy_selection()
+        elif op == "SELECT_ALL":
+            actions.select_all()
+        elif op == "CLOSE_WINDOW":
+            actions.close_window()
+        elif op == "QUIT_APP":
+            actions.quit_app(d.get("app"))
         elif op == "SCREENSHOT":
             # If an AXWindow or card is focused/present, capture cropped window
             win = next((e for e in els if e.role == "AXWindow" and e.w > 100 and e.h > 100), None)
@@ -459,8 +498,13 @@ class Agent:
                 x, y = w // 2, h // 2
             actions.scroll(x, y, "down" if op == "SCROLL_DOWN" else "up", 400)
         elif op == "OPEN_APP":
-            if not actions.open_app(d["app"]):
-                raise RuntimeError(f"could not open {d['app']}")
+            urls = re.findall(r'https?://[^\s,;"\']+|www\.[^\s,;"\']+', task)
+            is_browser = d.get("app", "").lower() in ("safari", "google chrome", "chrome", "arc", "brave", "firefox", "edge")
+            if urls and is_browser:
+                actions.open_url(urls[0], browser=d.get("app"))
+            else:
+                if not actions.open_app(d["app"]):
+                    raise RuntimeError(f"could not open {d['app']}")
         elif op == "WAIT":
             time.sleep(0.5)
 
@@ -573,4 +617,12 @@ def _describe_op(d: dict) -> str:
         return f'TYPE "{d["text"]}" into {el.describe() if el else "focused field"}'
     if op == "OPEN_APP":
         return f"OPEN_APP {d['app']}"
+    if op == "CLOSE_WINDOW":
+        return "CLOSE_WINDOW"
+    if op == "QUIT_APP":
+        return f"QUIT_APP {d.get('app', '')}".strip()
+    if op == "COPY":
+        return "COPY selection"
+    if op == "SELECT_ALL":
+        return "SELECT_ALL"
     return f"{op} {el.describe()}" if el and op in ("CLICK", "DOUBLE_CLICK", "SCROLL_DOWN", "SCROLL_UP") else op

@@ -37,11 +37,14 @@ class Element:
     w: int
     h: int
     focused: bool = False
+    context: str = ""
 
     def describe(self) -> str:
         role = self.role.removeprefix("AX")
         flag = " [focused]" if self.focused else ""
-        return f'{role} "{self.label}"{flag} at ({self.x},{self.y})'
+        ctx = f" (near '{self.context[:35]}')" if self.context and self.context != self.label else ""
+        return f'{role} "{self.label}"{ctx}{flag} at ({self.x},{self.y})'
+
 
 
 def screen_size() -> tuple[int, int]:
@@ -206,6 +209,21 @@ def _load_native_lib():
     return None
 
 
+def _enrich_element_context(elements: list[Element]) -> list[Element]:
+    """Enrich actionable elements that have generic or short labels with nearby text context."""
+    texts = [e for e in elements if e.role in ("AXStaticText", "AXHeading", "AXTextArea") and len(e.label) > 3]
+    if not texts:
+        return elements
+    for e in elements:
+        if e.role in ("AXButton", "AXLink", "AXPopUpButton", "AXTextField") and len(e.label) < 20:
+            above = [t for t in texts if 0 <= (e.y - t.y) <= 100 and abs(e.x - t.x) < 450]
+            if above:
+                closest = min(above, key=lambda t: (e.y - t.y)**2 + (e.x - t.x)**2)
+                if closest.label and closest.label != e.label:
+                    e.context = closest.label
+    return elements
+
+
 def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Element]]:
     """Walk the frontmost app's AX tree and return on-screen actionable elements."""
     lib = _load_native_lib()
@@ -229,7 +247,7 @@ def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Eleme
                     )
                     for e in data.get("elements", [])
                 ]
-                return app_name, elements
+                return app_name, _enrich_element_context(elements)
         except Exception:
             pass
 
@@ -279,7 +297,7 @@ def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Eleme
     if menubar is not None:
         for item in _attr(menubar, "AXChildren") or []:
             visit(item, 0)
-    return app_name, out
+    return app_name, _enrich_element_context(out)
 
 
 def ax_trusted() -> bool:

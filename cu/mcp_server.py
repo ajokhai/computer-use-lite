@@ -100,6 +100,17 @@ def click_element(element: str, double: bool = False) -> str:
     """Click an element by id from list_screen_elements (e.g. "e12") or by description (e.g. "Send button")."""
     _, els = _elements(refresh=not _is_id(element))
     el, how = _match(element, els)
+    if el is None and _has("TYPESAFE_API_KEY", "JEV_API_KEY"):
+        try:
+            from .jev import Jev
+            pt, conf = Jev().locate(element)
+            if pt and conf >= 0.2:
+                cx, cy, _, _ = pt
+                _narrate(f"Clicking {element}")
+                actions.click(cx, cy, clicks=2 if double else 1)
+                return f"clicked {element!r} via jev visual box at ({cx},{cy}) conf={conf:.2f}"
+        except Exception:
+            pass
     if el is None:
         return f"no element matches {element!r}; call list_screen_elements or use click_at"
     _narrate(f"Clicking {el.label}" if el.label else "Clicking")

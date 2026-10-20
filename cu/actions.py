@@ -214,18 +214,23 @@ def drag(x1, y1, x2, y2):
 
 def open_app(name: str) -> bool:
     r = subprocess.run(["open", "-a", name], capture_output=True)
+    subprocess.run(["osascript", "-e", f'tell application "{name}" to activate'], capture_output=True)
     try:
         from Cocoa import NSWorkspace, NSApplicationActivateIgnoringOtherApps
         ws = NSWorkspace.sharedWorkspace()
-        for app in ws.runningApplications():
-            n = (app.localizedName() or "").lower()
-            bid = (app.bundleIdentifier() or "").lower()
-            if n == name.lower() or name.lower() in bid or name.lower() in n:
-                app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+        for _ in range(15):
+            front = ws.frontmostApplication()
+            if front and (name.lower() in (front.localizedName() or "").lower()):
                 break
+            for app in ws.runningApplications():
+                n = (app.localizedName() or "").lower()
+                bid = (app.bundleIdentifier() or "").lower()
+                if n == name.lower() or name.lower() in bid or name.lower() in n:
+                    app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                    break
+            time.sleep(0.1)
     except Exception:
-        pass
-    time.sleep(0.4)
+        time.sleep(0.5)
     return r.returncode == 0
 
 
@@ -238,6 +243,91 @@ def quit_app(name: str | None = None):
     time.sleep(0.2)
 
 
-def open_url(url: str):
-    subprocess.run(["open", url])
-    time.sleep(0.5)
+def close_window():
+    """Close the frontmost window or tab cleanly with Command-W."""
+    hotkey(["command", "w"])
+    time.sleep(0.15)
+
+
+def copy_selection():
+    """Copy the active selection or link to clipboard with Command-C."""
+    hotkey(["command", "c"])
+    time.sleep(0.08)
+
+
+def select_all():
+    """Select all content in the focused field or document with Command-A."""
+    hotkey(["command", "a"])
+    time.sleep(0.06)
+
+
+def open_url(url: str, browser: str | None = None):
+    """Open a URL, smartly reusing an existing open browser tab if one already has the domain."""
+    import urllib.parse
+    parsed = urllib.parse.urlparse(url)
+    domain = parsed.netloc.lower()
+    if domain:
+        # Check Google Chrome first if running, then Safari
+        script = f'''
+        tell application "System Events"
+            set chromeRunning to (exists (processes whose name is "Google Chrome"))
+            set safariRunning to (exists (processes whose name is "Safari"))
+        end tell
+        if chromeRunning then
+            tell application "Google Chrome"
+                repeat with w in windows
+                    set tabIdx to 1
+                    repeat with t in tabs of w
+                        set tUrl to (URL of t)
+                        if tUrl contains "{domain}" then
+                            set active tab index of w to tabIdx
+                            set index of w to 1
+                            activate
+                            if tUrl is not "{url}" and "{url}" is not "" then
+                                set URL of t to "{url}"
+                            end if
+                            return "reused"
+                        end if
+                        set tabIdx to tabIdx + 1
+                    end repeat
+                end repeat
+            end tell
+        else if safariRunning then
+            tell application "Safari"
+                repeat with w in windows
+                    set tabIdx to 1
+                    repeat with t in tabs of w
+                        set tUrl to (URL of t)
+                        if tUrl contains "{domain}" then
+                            set current tab of w to t
+                            set index of w to 1
+                            activate
+                            if tUrl is not "{url}" and "{url}" is not "" then
+                                set URL of t to "{url}"
+                            end if
+                            return "reused"
+                        end if
+                        set tabIdx to tabIdx + 1
+                    end repeat
+                end repeat
+            end tell
+        end if
+        return "new"
+        '''
+        try:
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=2.0)
+            if res.stdout.strip() == "reused":
+                time.sleep(0.8)
+                return
+        except Exception:
+            pass
+
+    cmd = ["open"]
+    if browser:
+        cmd.extend(["-a", browser])
+    cmd.append(url)
+    subprocess.run(cmd)
+    if browser:
+        subprocess.run(["osascript", "-e", f'tell application "{browser}" to activate'])
+    time.sleep(1.0)
+
