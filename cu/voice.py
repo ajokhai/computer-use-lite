@@ -95,18 +95,37 @@ class Listener:
                 return
             self.listening = False
             text, req = self._text.strip(), self._request
-        self.engine.stop()
-        self.engine.inputNode().removeTapOnBus_(0)
+        try:
+            self.engine.stop()
+            self.engine.inputNode().removeTapOnBus_(0)
+            self.engine.reset()
+        except Exception:
+            pass
         if req is not None:
-            req.endAudio()
+            try:
+                req.endAudio()
+            except Exception:
+                pass
         if self._task is not None:
-            self._task.cancel()
+            try:
+                self._task.cancel()
+            except Exception:
+                pass
             self._task = None
         if emit:
             self.events.put(("final", text))
 
     def stop(self):
         self._finish(emit=False)
+
+    def close(self):
+        self.stop()
+        try:
+            self.engine.stop()
+            self.engine.inputNode().removeTapOnBus_(0)
+            self.engine.reset()
+        except Exception:
+            pass
 
 
 def strip_wake_word(text: str) -> str | None:

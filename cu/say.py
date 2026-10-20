@@ -94,7 +94,8 @@ def speak(text: str, voice: str | None = None, interrupt: bool = True):
 
 def _speak_mac(text: str, name: str = ""):
     global _proc
-    cmd = ["say", "-r", "200"] + (["-v", name] if name else [])
+    # Standard natural speech rate (~175 wpm) for crisp, intelligible speech
+    cmd = ["say", "-r", "175"] + (["-v", name] if name else [])
     _proc = subprocess.Popen(cmd + [text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

@@ -22,9 +22,11 @@ from AppKit import (
 
 from . import __version__, integration, say, updater, usage, voicepack
 from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
+from .logger import CRASH_LOG, setup_logging
 
-IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "exclamationmark.triangle"
-MIC_ICON = "mic.fill"
+setup_logging()
+
+IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "cursorarrow.rays"
 SPACE_KEY = 49  # ⌃⌥Space starts/stops talking
 
 VOICE_SHORTCUTS = {
@@ -162,6 +164,7 @@ class MenuBar(rumps.App):
             rumps.MenuItem("Grant Screen Recording…", callback=lambda _: integration.open_privacy_settings("ScreenCapture")),
             None,
             rumps.MenuItem("Open Log", callback=lambda _: _open(LOG)),
+            rumps.MenuItem("Open Crash Logs", callback=lambda _: _open(CRASH_LOG.parent)),
             None,
             self.update_item,
             self.auto_update_item,
@@ -253,7 +256,7 @@ class MenuBar(rumps.App):
         self.usage_menu.add(limits_menu)
         self.usage_menu.add(rumps.MenuItem("Clear “out of quota” flags", callback=self.clear_flags))
         if self.agent is None:
-            self.set_icon(WARN_ICON if any_out else IDLE_ICON)
+            self.set_icon(IDLE_ICON)
 
     def open_dashboard(self, provider: str):
         import webbrowser
@@ -497,7 +500,12 @@ class MenuBar(rumps.App):
             item.state = (current == key)
             self.voice_shortcut_menu.add(item)
         self.voice_shortcut_menu.add(rumps.separator)
-        self.voice_shortcut_menu.add(rumps.MenuItem("Custom Shortcut…", callback=lambda _: self.custom_voice_shortcut_dialog()))
+        self.voice_shortcut_menu.add(rumps.MenuItem("Record Shortcut…", callback=lambda _: self.record_shortcut_dialog()))
+        self.voice_shortcut_menu.add(rumps.MenuItem("Type Custom Shortcut…", callback=lambda _: self.custom_voice_shortcut_dialog()))
+
+    def record_shortcut_dialog(self):
+        from .shortcut_recorder import show_shortcut_recorder
+        show_shortcut_recorder(self.set_voice_shortcut)
 
     def set_voice_shortcut(self, key: str):
         self.settings["voice_shortcut"] = key
@@ -783,6 +791,8 @@ class MenuBar(rumps.App):
             self.direct = False
             if self.listener and self.listener.listening:
                 self.listener.stop()
+            if not self.settings["hands_free"]:
+                self._drop_listener()
             self.status.title = "Idle"
             self.set_icon(IDLE_ICON)
             self.say("Voice mode off.")
@@ -805,6 +815,8 @@ class MenuBar(rumps.App):
             self.prompt_bar.set_hold_listening_state(False)
         if self.listener and self.listener.listening:
             self.listener._finish()
+        if not getattr(self, "voice_mode_active", False) and not self.settings["hands_free"]:
+            self._drop_listener()
 
     def talk_now(self):
         """Talk / ⌃⌥Space: start listening without a wake word, or end the utterance if already listening."""
@@ -813,11 +825,14 @@ class MenuBar(rumps.App):
             self.prompt_bar = PromptBar(self)
         self.prompt_bar.show()
         self.prompt_bar.is_voice_mode = True
-        self.prompt_bar.voice_btn.setTitle_("🔴")
-        self.prompt_bar.input_field.setPlaceholderString_("🎙 Listening... Speak your task now (or ⌃⌥Space)")
+        if hasattr(self.prompt_bar, "voice_btn"):
+            self.prompt_bar.voice_btn.setTitle_("● REC")
+        self.prompt_bar.set_placeholder("Listening... Speak your task now (or press shortcut again)")
 
         if self.listener and self.listener.listening and self.direct:
             self.listener._finish()
+            if not getattr(self, "voice_mode_active", False) and not self.settings["hands_free"]:
+                self._drop_listener()
             return
         self.direct = True
         if self.listener and self.listener.listening:
@@ -829,7 +844,6 @@ class MenuBar(rumps.App):
             return
         self.listener.start()
         if self.listener.listening:
-            self.set_icon(MIC_ICON)
             if (self.direct or getattr(self, "voice_mode_active", False)) and self.agent is None:
                 self.status.title = "Listening…"
 
@@ -842,6 +856,8 @@ class MenuBar(rumps.App):
         if kind == "error":
             self.direct = False
             self.status.title = f"Voice: {_short(text, 50)}"
+            if not getattr(self, "voice_mode_active", False) and not self.settings["hands_free"]:
+                self._drop_listener()
             return
         if say.is_echo(text):
             return  # our own narration coming back through the mic
@@ -867,11 +883,15 @@ class MenuBar(rumps.App):
         if not command:
             if self.agent is None:
                 self.status.title = "🎙 Listening…" if is_vm else "Idle"
+            if not is_vm and not self.settings["hands_free"]:
+                self._drop_listener()
             return
         if voice.is_stop(command):
             if self.agent:
                 self.stop(None)
                 self.say("Stopping.")
+            if not is_vm and not self.settings["hands_free"]:
+                self._drop_listener()
             return
 
         cmd_lower = command.lower()
@@ -879,7 +899,23 @@ class MenuBar(rumps.App):
             self.toggle_voice_mode()
             return
 
+        # Check for conversational / microphone check phrases so we respond politely instead of running a desktop task:
+        mic_check_phrases = (
+            "can you hear me", "do you hear me", "are you there",
+            "can you hear", "hear me", "testing testing", "hello", "hi there", "hey"
+        )
+        if any(cmd_lower.startswith(p) or cmd_lower == p for p in mic_check_phrases) and len(cmd_lower.split()) <= 6:
+            self.say("Yes, I hear you loud and clear! What can I help you do?")
+            if hasattr(self, "prompt_bar") and self.prompt_bar:
+                self.prompt_bar.set_placeholder("I hear you loud and clear! What can I help you do?")
+            if not is_vm and not self.settings["hands_free"]:
+                self._drop_listener()
+            return
+
         self.log(f"🎙 {command}")
+        if not is_vm and not self.settings["hands_free"]:
+            self._drop_listener()
+
         if self.agent:
             # A new instruction mid-task replaces the current one.
             self.pending = command
@@ -939,11 +975,14 @@ class MenuBar(rumps.App):
             return
         while not self.listener.events.empty():
             self.on_speech(*self.listener.events.get())
-        self.listener.tick()
+        if self.listener is not None:
+            self.listener.tick()
         is_vm = getattr(self, "voice_mode_active", False)
-        if (self.settings["hands_free"] or is_vm) and not self.listener.listening and not self.awaiting_confirm:
+        if (self.settings["hands_free"] or is_vm) and self.listener is not None and not self.listener.listening and not self.awaiting_confirm:
             if is_vm or not say.speaking():
                 self._listen()
+        elif not self.settings["hands_free"] and not is_vm and self.listener is not None and not self.listener.listening:
+            self._drop_listener()
 
     # --- running -------------------------------------------------------------
 
