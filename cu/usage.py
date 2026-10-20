@@ -76,8 +76,8 @@ def mark_exhausted(provider: str, until: float | None):
 
 def clear_exhausted(provider: str | None = None):
     with _locked() as data:
-        for name, b in data.items():
-            if provider in (None, name):
+        for name, b in list(data.items()):
+            if isinstance(b, dict) and provider in (None, name):
                 b["exhausted_until"] = None
 
 
@@ -95,7 +95,7 @@ def status(provider: str) -> dict:
         out["used"] = b["requests"]
         out["limit"] = limit.get("requests_per_day")
     over_limit = out["limit"] is not None and out["used"] >= out["limit"]
-    blocked_until = b.get("exhausted_until") if (b.get("exhausted_until") or 0) > now else None
+    blocked_until = b.get("exhausted_until") if (b.get("exhausted_until") or 0) > now and (out["used"] or 0) > 0 else None
     out["available"] = not over_limit and blocked_until is None
     out["blocked_until"] = b["window_end"] if over_limit else blocked_until
     return out

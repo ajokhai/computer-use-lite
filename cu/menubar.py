@@ -186,6 +186,7 @@ class MenuBar(rumps.App):
             self.last, settings_menu, None,
             rumps.MenuItem("Quit Computer Use", callback=self.quit, key="q"),
         ]
+        usage.clear_exhausted()
         self.refresh()
         self.refresh_usage()
         rumps.Timer(self.pump, 0.15).start()
@@ -751,10 +752,15 @@ class MenuBar(rumps.App):
 
     def toggle_voice_mode(self):
         """Toggle persistent interactive voice mode."""
-        self.voice_mode_active = not getattr(self, "voice_mode_active", False)
         if not hasattr(self, "prompt_bar") or self.prompt_bar is None:
             from .prompt_bar import PromptBar
             self.prompt_bar = PromptBar(self)
+
+        is_visible = bool(self.prompt_bar.panel and self.prompt_bar.panel.isVisible())
+        if not is_visible:
+            self.voice_mode_active = False
+
+        self.voice_mode_active = not getattr(self, "voice_mode_active", False)
 
         if self.voice_mode_active:
             self.prompt_bar.show()
@@ -765,6 +771,7 @@ class MenuBar(rumps.App):
             self.say("I'm listening.")
         else:
             self.prompt_bar.set_voice_mode_state(False)
+            self.prompt_bar.hide()
             self.direct = False
             if self.listener and self.listener.listening:
                 self.listener.stop()
@@ -890,7 +897,11 @@ class MenuBar(rumps.App):
             return
 
         self.log(f"🎙 {command}")
-        if not is_vm and not self.settings["hands_free"]:
+        self.voice_mode_active = False
+        if hasattr(self, "prompt_bar") and self.prompt_bar:
+            self.prompt_bar.set_voice_mode_state(False)
+            self.prompt_bar.hide()
+        if not self.settings["hands_free"]:
             self._drop_listener()
 
         if self.agent:
@@ -972,6 +983,13 @@ class MenuBar(rumps.App):
 
     def start(self, task: str):
         from .agent import Agent
+
+        self.voice_mode_active = False
+        if hasattr(self, "prompt_bar") and self.prompt_bar:
+            self.prompt_bar.set_voice_mode_state(False)
+            self.prompt_bar.hide()
+        if not self.settings["hands_free"]:
+            self._drop_listener()
 
         self.settings = load_settings()
         try:
@@ -1093,7 +1111,11 @@ class MenuBar(rumps.App):
                 done.set()
             elif kind == "finished":
                 self.agent = None
+                self.voice_mode_active = False
+                if not self.settings["hands_free"]:
+                    self._drop_listener()
                 self.status.title = "Idle"
+                self.set_icon(IDLE_ICON)
                 self.last.title = f"Last: {_short(payload, 50)}"
                 self.refresh()
                 self.refresh_usage()
