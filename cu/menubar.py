@@ -10,7 +10,7 @@ from AppKit import (NSApplication, NSEvent, NSEventMaskKeyDown, NSEventModifierF
                     NSEventModifierFlagOption, NSImage, NSWorkspace)
 
 from . import __version__, integration, say, updater, usage, voicepack
-from .config import KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
+from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
 
 IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "exclamationmark.triangle"
 MIC_ICON = "mic.fill"
@@ -159,15 +159,26 @@ class MenuBar(rumps.App):
         any_out = False
         for provider, line in zip(providers, lines):
             has_key = _env_key(provider)
-            item = rumps.MenuItem(line if has_key else f"{usage.pretty(provider)}: no API key",
-                                  callback=lambda _, p=provider: self.set_limit(p))
+            cb = (lambda _, p=provider: self.open_dashboard(p)) if has_key else (lambda _: self.edit_keys(None))
+            title = line if has_key else f"{usage.pretty(provider)}: no API key (click to add)"
+            item = rumps.MenuItem(title, callback=cb)
             self.usage_menu.add(item)
             any_out |= has_key and not usage.status(provider)["available"]
         self.usage_menu.add(rumps.separator)
-        self.usage_menu.add(rumps.MenuItem("Click a line to set its limit from your dashboard", callback=None))
+        self.usage_menu.add(rumps.MenuItem("Click a line to open its online dashboard", callback=None))
+        limits_menu = rumps.MenuItem("Set Budget / Limits")
+        limits_menu.add(rumps.MenuItem("Jev Monthly Budget…", callback=lambda _: self.set_limit("jev")))
+        for m in self.settings["gemini_models"]:
+            limits_menu.add(rumps.MenuItem(f"{usage.pretty(m)} Daily Limit…", callback=lambda _, mod=m: self.set_limit(mod)))
+        self.usage_menu.add(limits_menu)
         self.usage_menu.add(rumps.MenuItem("Clear “out of quota” flags", callback=self.clear_flags))
         if self.agent is None:
             self.set_icon(WARN_ICON if any_out else IDLE_ICON)
+
+    def open_dashboard(self, provider: str):
+        import webbrowser
+        url = "https://console.typesafe.ai" if provider == "jev" else "https://aistudio.google.com"
+        webbrowser.open(url)
 
     def set_mode(self, mode):
         self.settings["mode"] = mode
@@ -303,38 +314,80 @@ class MenuBar(rumps.App):
         return resp.text.strip() if resp.clicked else None
 
     def edit_keys(self, _):
-        labels = {"GEMINI_API_KEY": "Gemini API key (aistudio.google.com/apikey)",
-                  "TYPESAFE_API_KEY": "Jev API key (TypeSafe dashboard)"}
-        for name in KEYS:
-            current = get_key(name)
-            hint = "A key is saved. Leave it as is to keep it, or clear the field to remove it." if current else "Optional."
-            value = self._prompt("API Keys", f"{labels[name]}\n{hint}", default=current, secure=True)
-            if value is None:
-                return
-            if value != current:
-                set_key(name, value)
+        """One window with a field per key. Blank fields are left alone; Remove clears a saved key."""
+        from AppKit import NSAlert, NSFont, NSMakeRect, NSSecureTextField, NSTextField, NSView
+
+        rows = len(KEYS)
+        width, row_h = 420, 74
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, width, rows * row_h))
+        fields = {}
+        for i, name in enumerate(KEYS):
+            label, hint = KEY_INFO[name]
+            saved = bool(get_key(name))
+            y = (rows - 1 - i) * row_h
+            title = NSTextField.labelWithString_(f"{label}{'  ✓ saved' if saved else ''}")
+            title.setFont_(NSFont.boldSystemFontOfSize_(12))
+            title.setFrame_(NSMakeRect(0, y + 52, width, 18))
+            field = NSSecureTextField.alloc().initWithFrame_(NSMakeRect(0, y + 26, width, 24))
+            field.setPlaceholderString_("Saved — type a new key to replace it" if saved else "Paste key (optional)")
+            note = NSTextField.labelWithString_(hint)
+            note.setFont_(NSFont.systemFontOfSize_(11))
+            note.setTextColor_(__import__("AppKit").NSColor.secondaryLabelColor())
+            note.setFrame_(NSMakeRect(0, y + 6, width, 16))
+            for v in (title, field, note):
+                view.addSubview_(v)
+            fields[name] = field
+
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("API Keys")
+        alert.setInformativeText_("All optional. Keys are stored in your macOS Keychain.")
+        alert.addButtonWithTitle_("Save")
+        alert.addButtonWithTitle_("Cancel")
+        alert.addButtonWithTitle_("Remove Saved Keys…")
+        alert.setAccessoryView_(view)
+        alert.window().setInitialFirstResponder_(fields[KEYS[0]])
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        choice = alert.runModal()
+        if choice == 1000:  # Save
+            for name, field in fields.items():
+                value = str(field.stringValue()).strip()
+                if value:
+                    set_key(name, value)
+        elif choice == 1002:  # Remove…
+            saved = [n for n in KEYS if get_key(n)]
+            for name in saved:
+                if rumps.alert("Remove key", f"Remove the saved {KEY_INFO[name][0]} key?", ok="Remove",
+                               cancel="Keep") == 1:
+                    set_key(name, "")
         load_keys()
         self.refresh_usage()
 
     def set_limit(self, provider: str):
         limits = self.settings["limits"].setdefault(provider, {})
         if provider == "jev":
-            v = self._prompt("Jev budget", "Monthly Jev budget in USD (blank = no limit):",
+            v = self._prompt("Jev Budget Alert", "Monthly Jev budget in USD (blank = no limit / track only):",
                              str(limits.get("usd_per_month") or ""))
             if v is None:
                 return
             limits["usd_per_month"] = float(v) if v else None
-            d = self._prompt("Jev budget", "Day of the month your Jev billing resets (1–28):",
-                             str(limits.get("reset_day") or 1))
-            if d:
-                limits["reset_day"] = max(1, min(28, int(d)))
+            if limits["usd_per_month"] is not None:
+                d = self._prompt("Jev Billing Cycle", "Day of the month your billing resets (1–28):",
+                                 str(limits.get("reset_day") or 1))
+                if d:
+                    try:
+                        limits["reset_day"] = max(1, min(28, int(d)))
+                    except ValueError:
+                        pass
         else:
             v = self._prompt(usage.pretty(provider),
-                             "Requests per day for this model, from AI Studio › Usage & limits (blank = unknown).\n"
+                             "Daily request limit for this model (blank = no limit).\n"
                              "Resets at midnight Pacific time.", str(limits.get("requests_per_day") or ""))
             if v is None:
                 return
-            limits["requests_per_day"] = int(v) if v else None
+            try:
+                limits["requests_per_day"] = int(v) if v else None
+            except ValueError:
+                pass
         save_settings(self.settings)
         self.refresh_usage()
 

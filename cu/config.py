@@ -9,7 +9,12 @@ APP_NAME = "Computer Use"
 DATA = Path.home() / "Library" / "Application Support" / APP_NAME
 LOG = Path.home() / "Library" / "Logs" / "computer-use.log"
 KEYCHAIN_SERVICE = "computer-use-lite"
-KEYS = ("GEMINI_API_KEY", "TYPESAFE_API_KEY")
+KEYS = ("TYPESAFE_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN")
+KEY_INFO = {  # label, where to get it
+    "TYPESAFE_API_KEY": ("Jev (TypeSafe)", "Cheapest actions. From your TypeSafe dashboard."),
+    "GEMINI_API_KEY": ("Gemini", "Planning, vision and Gemini voices. aistudio.google.com/apikey"),
+    "GITHUB_TOKEN": ("GitHub token", "Only for updates from a private repo when the gh CLI isn't signed in."),
+}
 
 DEFAULTS = {
     "mode": "auto",
