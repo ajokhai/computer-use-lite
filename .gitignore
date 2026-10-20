@@ -6,3 +6,5 @@ build/
 *.spec
 packaging/AppIcon.iconset/
 .DS_Store
+target/
+**/target/

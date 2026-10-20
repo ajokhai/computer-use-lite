@@ -191,7 +191,7 @@ class Agent:
                 if not self.confirm(f"About to: {desc}. Proceed?"):
                     return self._report("stopped: user declined")
             try:
-                self._do_jev(op, d, el)
+                self._do_jev(op, d, el, task)
             except Exception as e:
                 history.append(f"FAILED: {desc} ({e})")
                 misses += 1
@@ -199,16 +199,40 @@ class Agent:
             self.stats["jev_steps"] += 1
             history.append(f"ok: {desc}")
             recent.append(desc)
-            time.sleep(0.6)
+            time.sleep(0.08)
         return self._report("stopped: hit the action limit")
 
-    def _do_jev(self, op: str, d: dict, el: Element | None):
+    def _do_jev(self, op: str, d: dict, el: Element | None, task: str = ""):
         if op in ("CLICK", "DOUBLE_CLICK"):
             actions.click(el.x, el.y, clicks=2 if op == "DOUBLE_CLICK" else 1)
         elif op == "TYPE":
+            # Safety Guard: Never write into an existing document when the user asked to create a new one!
+            if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
+                is_create = any(w in task.lower() for w in ("create", "new note", "new doc", "write a new"))
+                is_explicit = el.label.lower() in task.lower()
+                if is_create and not is_explicit:
+                    raise RuntimeError(
+                        f"Safety Guard: Refusing to type into existing document '{el.label[:30]}...' "
+                        f"when task asked to create a new item. Ensure a blank new document is open."
+                    )
             if el is not None and not el.focused:
                 actions.click(el.x, el.y)
             actions.type_text(d["text"], clear=el is not None and el.role != "AXTextArea")
+        elif op == "PASTE":
+            # Safety Guard: Never paste into an existing document when creating a new one!
+            if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
+                is_create = any(w in task.lower() for w in ("create", "new note", "new doc", "write a new"))
+                is_explicit = el.label.lower() in task.lower()
+                if is_create and not is_explicit:
+                    raise RuntimeError(
+                        f"Safety Guard: Refusing to paste into existing document '{el.label[:30]}...' "
+                        f"when task asked to create a new item."
+                    )
+            if el is not None and not el.focused:
+                actions.click(el.x, el.y)
+            actions.paste()
+        elif op == "SCREENSHOT":
+            actions.screenshot_to_clipboard()
         elif op == "PRESS_ENTER":
             actions.hotkey(["enter"])
         elif op == "PRESS_ESCAPE":
@@ -216,7 +240,7 @@ class Agent:
         elif op == "PRESS_TAB":
             actions.hotkey(["tab"])
         elif op == "NEW_ITEM":
-            actions.hotkey(["command", "n"])
+            actions.create_new_document(d.get("app"))
         elif op in ("SCROLL_DOWN", "SCROLL_UP"):
             x, y = (el.x, el.y) if el else (None, None)
             if x is None:
@@ -228,7 +252,7 @@ class Agent:
             if not actions.open_app(d["app"]):
                 raise RuntimeError(f"could not open {d['app']}")
         elif op == "WAIT":
-            time.sleep(1.5)
+            time.sleep(0.5)
 
     def step(self, s: dict) -> tuple[bool, str]:
         kind = s.get("kind")
@@ -280,6 +304,14 @@ class Agent:
         if kind in ("click", "double_click"):
             actions.click(el.x, el.y, clicks=2 if kind == "double_click" else 1)
         elif kind == "type":
+            if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
+                is_create = any(w in s.get("do", "").lower() for w in ("create", "new note", "new doc", "write a new"))
+                is_explicit = el.label.lower() in s.get("do", "").lower() or el.label.lower() in s.get("target", "").lower()
+                if is_create and not is_explicit:
+                    raise RuntimeError(
+                        f"Safety Guard: Refusing to type into existing document '{el.label[:30]}...' "
+                        f"when step asked to create a new item."
+                    )
             actions.click(el.x, el.y)
             actions.type_text(s["text"], press_enter=s.get("enter", False), clear=el.role != "AXTextArea")
         elif kind == "scroll":

@@ -137,7 +137,11 @@ def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Eleme
                         w=int(size.width), h=int(size.height),
                         focused=focused is not None and el == focused,
                     ))
-        for child in _attr(el, "AXChildren") or []:
+        children = _attr(el, "AXChildren") or []
+        # Prune long lists/tables so sidebar note lists don't starve main editor panes
+        if role in ("AXOutline", "AXTable", "AXList") and len(children) > 12:
+            children = children[:12]
+        for child in children:
             visit(child, depth + 1)
 
     windows = list(_attr(root, "AXWindows") or [])

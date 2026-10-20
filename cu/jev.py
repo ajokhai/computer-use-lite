@@ -28,6 +28,8 @@ OPS = {
     "SCROLL_DOWN": "Scroll down to reveal more content.",
     "SCROLL_UP": "Scroll up.",
     "OPEN_APP": "Launch or switch to an application; the needed app is not the frontmost app.",
+    "PASTE": "Paste the clipboard content (press Command-V) into the active note, document, or field.",
+    "SCREENSHOT": "Take a screenshot of the current screen/window and copy it to the clipboard.",
     "WAIT": "Wait for something to finish loading.",
     "DONE": "The task is fully complete; nothing left to do.",
     "BLOCKED": "Cannot proceed: needs a password, a decision, or something not on screen.",
@@ -164,8 +166,11 @@ def text_candidates(task: str, limit: int = 60) -> list[str]:
     """Phrases from the task Jev may choose to type, since it can't generate text."""
     out = [m for pair in re.findall(r'"([^"]+)"|\u201c([^\u201d]+)\u201d|\'([^\']{2,})\'', task) for m in pair if m]
     for verb in ("type", "write", "enter", "search for", "search", "look up", "find", "named", "called",
-                 "titled", "saying", "that says", "to say", "message", "subject", "note", "to", "for", "about"):
+                 "titled", "saying", "that says", "to say", "message", "subject", "note", "to", "for", "about",
+                 "calculate", "compute", "solve", "math", "evaluate"):
         out += [m.strip(" .") for m in re.findall(rf"\b{verb}\b[:\s]+(.+?)(?=$|[.;]| and then | then )", task, re.I)]
+    out += re.findall(r"[\d\.\,]+(?:\s*[\+\-\*\/\=\%]\s*[\d\.\,]+)+", task)
+    out += re.findall(r"\b\d+\b", task)
     out += re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+|https?://\S+|\b[\w-]+\.(?:com|org|net|io|ai|dev|co)\S*", task)
     if ":" in task:
         out.append(task.split(":", 1)[1].strip(" ."))
