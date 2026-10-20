@@ -1,6 +1,7 @@
 pub mod input;
 pub mod capture;
 pub mod memory;
+pub mod decision;
 
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
@@ -378,5 +379,126 @@ pub extern "C" fn cu_capture_to_file(x: f64, y: f64, w: f64, h: f64, out_path: *
     } else {
         false
     }
+}
+
+#[no_mangle]
+pub extern "C" fn cu_check_typing_safety(
+    text: *const c_char,
+    el_role: *const c_char,
+    el_label: *const c_char,
+    app: *const c_char,
+    els_labels_json: *const c_char,
+) -> *mut c_char {
+    let text_str = if text.is_null() { "" } else { unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("") };
+    let el_role_str = if el_role.is_null() { None } else { unsafe { CStr::from_ptr(el_role) }.to_str().ok() };
+    let el_label_str = if el_label.is_null() { None } else { unsafe { CStr::from_ptr(el_label) }.to_str().ok() };
+    let app_str = if app.is_null() { "" } else { unsafe { CStr::from_ptr(app) }.to_str().unwrap_or("") };
+    let els_labels: Vec<String> = if !els_labels_json.is_null() {
+        if let Ok(raw) = unsafe { CStr::from_ptr(els_labels_json) }.to_str() {
+            serde_json::from_str(raw).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let res = decision::check_typing_safety(text_str, el_role_str, el_label_str, app_str, &els_labels);
+    let json = serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string());
+    CString::new(json).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn cu_check_doc_safety(
+    task: *const c_char,
+    el_role: *const c_char,
+    el_label: *const c_char,
+) -> *mut c_char {
+    let task_str = if task.is_null() { "" } else { unsafe { CStr::from_ptr(task) }.to_str().unwrap_or("") };
+    let el_role_str = if el_role.is_null() { None } else { unsafe { CStr::from_ptr(el_role) }.to_str().ok() };
+    let el_label_str = if el_label.is_null() { None } else { unsafe { CStr::from_ptr(el_label) }.to_str().ok() };
+
+    let res = decision::evaluate_document_write_safety(task_str, el_role_str, el_label_str);
+    let json = serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string());
+    CString::new(json).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn cu_is_risky_action(
+    op: *const c_char,
+    label: *const c_char,
+    detail: *const c_char,
+) -> bool {
+    let op_str = if op.is_null() { "" } else { unsafe { CStr::from_ptr(op) }.to_str().unwrap_or("") };
+    let label_str = if label.is_null() { "" } else { unsafe { CStr::from_ptr(label) }.to_str().unwrap_or("") };
+    let detail_str = if detail.is_null() { "" } else { unsafe { CStr::from_ptr(detail) }.to_str().unwrap_or("") };
+
+    decision::is_risky_action(op_str, label_str, detail_str)
+}
+
+#[no_mangle]
+pub extern "C" fn cu_verify_task_completion(
+    task: *const c_char,
+    app: *const c_char,
+    elements_json: *const c_char,
+    history_json: *const c_char,
+) -> *mut c_char {
+    let task_str = if task.is_null() { "" } else { unsafe { CStr::from_ptr(task) }.to_str().unwrap_or("") };
+    let app_str = if app.is_null() { "" } else { unsafe { CStr::from_ptr(app) }.to_str().unwrap_or("") };
+    let elements: Vec<NativeElement> = if !elements_json.is_null() {
+        if let Ok(raw) = unsafe { CStr::from_ptr(elements_json) }.to_str() {
+            serde_json::from_str(raw).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let history: Vec<String> = if !history_json.is_null() {
+        if let Ok(raw) = unsafe { CStr::from_ptr(history_json) }.to_str() {
+            serde_json::from_str(raw).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let res = decision::verify_task_completion(task_str, app_str, &elements, &history);
+    let json = serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string());
+    CString::new(json).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn cu_evaluate_agent_stuck(
+    op: *const c_char,
+    misses: usize,
+    recent_json: *const c_char,
+) -> *mut c_char {
+    let op_str = if op.is_null() { "" } else { unsafe { CStr::from_ptr(op) }.to_str().unwrap_or("") };
+    let recent: Vec<String> = if !recent_json.is_null() {
+        if let Ok(raw) = unsafe { CStr::from_ptr(recent_json) }.to_str() {
+            serde_json::from_str(raw).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let res = decision::evaluate_agent_loop_or_stuck(op_str, misses, &recent);
+    let json = serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string());
+    CString::new(json).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn cu_extract_text_candidates(
+    task: *const c_char,
+    limit: usize,
+) -> *mut c_char {
+    let task_str = if task.is_null() { "" } else { unsafe { CStr::from_ptr(task) }.to_str().unwrap_or("") };
+    let candidates = decision::extract_text_candidates(task_str, limit);
+    let json = serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
+    CString::new(json).unwrap().into_raw()
 }
 

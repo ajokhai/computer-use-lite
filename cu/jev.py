@@ -163,7 +163,20 @@ class Jev:
 
 
 def text_candidates(task: str, limit: int = 60) -> list[str]:
-    """Phrases from the task Jev may choose to type, since it can't generate text."""
+    """Phrases from the task Jev may choose to type (native Rust backend with Python fallback)."""
+    from .screen import _load_native_lib
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_extract_text_candidates"):
+        try:
+            import json
+            raw = lib.cu_extract_text_candidates(task.encode("utf-8"), limit)
+            if raw:
+                cands = json.loads(raw.decode("utf-8"))
+                if cands:
+                    return cands
+        except Exception:
+            pass
+
     out = [m for pair in re.findall(r'"([^"]+)"|\u201c([^\u201d]+)\u201d|\'([^\']{2,})\'', task) for m in pair if m]
     for verb in ("type", "write", "enter", "search for", "search", "look up", "find", "named", "called",
                  "titled", "saying", "that says", "to say", "message", "subject", "note", "to", "for", "about",

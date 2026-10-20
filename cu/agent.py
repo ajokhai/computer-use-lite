@@ -19,7 +19,7 @@ from . import actions, narrate, usage
 from .config import load_settings
 from .gemini import Gemini
 from .jev import Jev, installed_apps, text_candidates
-from .screen import Element, ax_elements
+from .screen import Element, _load_native_lib, ax_elements
 from .memory import get_memory_store, prompt_user_for_help
 
 GROUNDED = {"click", "double_click", "type", "scroll"}
@@ -29,9 +29,39 @@ RISKY_WORDS = ("send", "buy", "pay", "purchase", "order", "delete", "remove", "s
                "publish", "transfer", "confirm", "checkout", "place order", "erase", "trash")
 
 
+def is_risky_action(op: str, label: str = "", detail: str = "") -> bool:
+    """Evaluate whether an action is risky and warrants user confirmation (native Rust backend)."""
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_is_risky_action"):
+        try:
+            return bool(lib.cu_is_risky_action(op.encode("utf-8"), label.encode("utf-8"), detail.encode("utf-8")))
+        except Exception:
+            pass
+    combined = f"{op} {label} {detail}".lower()
+    return any(w in combined for w in RISKY_WORDS)
+
+
 def check_typing_safety(text: str, el: Element | None, app: str, els: list[Element]) -> None:
     """Hard safety guard against typing stray text, contact names into message bodies,
-    or message bodies into recipient fields."""
+    or message bodies into recipient fields (native Rust backend with Python fallback)."""
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_check_typing_safety"):
+        try:
+            import json
+            el_role = el.role.encode("utf-8") if el else None
+            el_label = el.label.encode("utf-8") if el else None
+            labels_json = json.dumps([e.label for e in els]).encode("utf-8")
+            raw = lib.cu_check_typing_safety(text.encode("utf-8"), el_role, el_label, app.encode("utf-8"), labels_json)
+            if raw:
+                dec = json.loads(raw.decode("utf-8"))
+                if not dec.get("allowed", True):
+                    raise RuntimeError(dec.get("violation") or dec.get("reason", "Typing safety violation"))
+                return
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
     app_lower = app.lower()
     is_comm = any(c in app_lower for c in ("messages", "mail", "slack", "discord", "telegram", "teams")) or any(
         "to:" in (e.label.lower()) or "recipient" in (e.label.lower()) for e in els
@@ -40,9 +70,12 @@ def check_typing_safety(text: str, el: Element | None, app: str, els: list[Eleme
         return
 
     text_lower = text.lower().strip()
-    is_recipient_name = any(contact in text_lower for contact in ("mr. josh", "josh", "@", "+1", "+44")) or (
-        len(text.split()) <= 3 and any(word[0].isupper() for word in text.split() if word)
-    )
+    words = text.split()
+    is_short = len(words) <= 3
+    has_honorific = any(text_lower.startswith(h) for h in ("mr.", "mr", "ms.", "ms", "mrs.", "mrs", "dr.", "dr", "prof.", "prof"))
+    is_contact_handle = "@" in text or text.startswith("+") or (text.startswith("0") and all(c.isdigit() or c in "- " for c in text))
+    is_capitalized_name = is_short and bool(words) and all(w[0].isupper() or w.startswith("+") or w.startswith("@") for w in words if w)
+    is_recipient_name = is_contact_handle or has_honorific or is_capitalized_name
 
     if el is not None:
         is_recipient_field = any(r in el.label.lower() for r in ("to:", "to", "recipient", "address", "search")) or el.role == "AXComboBox"
@@ -56,6 +89,37 @@ def check_typing_safety(text: str, el: Element | None, app: str, els: list[Eleme
         if not is_recipient_name and is_recipient_field and len(text.split()) > 4:
             raise RuntimeError(
                 f"Communication Safety Guard: Refusing to type message text '{text[:30]}...' into recipient field '{el.label}'."
+            )
+
+
+def check_document_write_safety(task: str, el: Element | None) -> None:
+    """Safety Guard: Never write or paste into an existing document when the user asked to create a new one (native Rust backend)."""
+    if el is None:
+        return
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_check_doc_safety"):
+        try:
+            import json
+            el_role = el.role.encode("utf-8") if el else None
+            el_label = el.label.encode("utf-8") if el else None
+            raw = lib.cu_check_doc_safety(task.encode("utf-8"), el_role, el_label)
+            if raw:
+                dec = json.loads(raw.decode("utf-8"))
+                if not dec.get("allowed", True):
+                    raise RuntimeError(dec.get("violation") or dec.get("reason", "Document write safety violation"))
+                return
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
+    if el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
+        is_create = any(w in task.lower() for w in ("create", "new note", "new doc", "write a new"))
+        is_explicit = el.label.lower() in task.lower()
+        if is_create and not is_explicit:
+            raise RuntimeError(
+                f"Safety Guard: Refusing to type/paste into existing document '{el.label[:30]}...' "
+                f"when task asked to create a new item. Ensure a blank new document is open."
             )
 
 
@@ -183,31 +247,81 @@ class Agent:
         return self._report("stopped: hit the round limit")
 
     def verify_task_completion(self, task: str, app: str, els: list[Element], history: list[str]) -> tuple[bool, str]:
-        """Self-correcting verification: confirms post-conditions before accepting DONE."""
+        """Self-correcting verification: confirms post-conditions before accepting DONE (native Rust backend)."""
+        lib = _load_native_lib()
+        if lib and hasattr(lib, "cu_verify_task_completion"):
+            try:
+                import json
+                els_payload = [
+                    {"id": e.id, "role": e.role, "label": e.label, "x": e.x, "y": e.y, "w": e.w, "h": e.h, "focused": e.focused}
+                    for e in els
+                ]
+                raw = lib.cu_verify_task_completion(
+                    task.encode("utf-8"),
+                    app.encode("utf-8"),
+                    json.dumps(els_payload).encode("utf-8"),
+                    json.dumps(history).encode("utf-8"),
+                )
+                if raw:
+                    data = json.loads(raw.decode("utf-8"))
+                    verified = data.get("verified", False)
+                    reason = data.get("reason", "")
+                    if not verified:
+                        return False, reason
+                    # If verified by native rule engine, run Jev check if available
+                    if self.jev and els:
+                        try:
+                            p = self.jev.check(f"Has this entire task been accomplished? Task: '{task}'", app, els)
+                            if p < 0.35:
+                                return False, f"Jev verification confidence is low (p={p:.2f})"
+                        except Exception:
+                            pass
+                    return True, reason
+            except Exception:
+                pass
+
         task_lower = task.lower()
+        words = [w.strip(".,;:?!") for w in task_lower.split()]
 
-        # 1. Share / Send verification
-        if any(w in task_lower for w in ("share", "send to", "message", "text mr", "text josh")):
-            share_elements = [e for e in els if "to:" in e.label.lower() or "add recipient" in e.label.lower() or e.role == "AXSheet"]
-            if share_elements:
-                return False, "Sharing/send sheet is still open. Invitation or message has not been sent."
-            has_send = any(any(s in h.lower() for s in ("send", "return", "enter", "delivered", "shared")) for h in history)
+        # Check for unresolved on-screen error alerts across any app
+        for el in els:
+            if el.role == "AXAlert" or (el.role == "AXDialog" and any(w in el.label.lower() for w in ("error", "failed", "could not", "invalid"))):
+                return False, f"An unresolved error dialog is active on screen: '{el.label}'."
+
+        # 1. Dispatch / send / share objective verification
+        dispatch_verbs = ("send", "share", "mail", "email", "message", "text", "post", "submit", "publish", "forward", "dispatch", "tweet")
+        if any(v in words or any(w.startswith(v) for w in words) for v in dispatch_verbs):
+            sheet_elements = [e for e in els if "to:" in e.label.lower() or "add recipient" in e.label.lower() or e.role in ("AXSheet", "AXPopover")]
+            if sheet_elements:
+                return False, "A compose, sharing, or recipient dispatch sheet is still active on screen and has not been submitted or closed."
+            has_send = any(any(s in h.lower() for s in ("send", "return", "enter", "delivered", "shared", "submit", "dispatch", "post", "publish", "command+return", "command,return")) for h in history)
             if not has_send:
-                return False, "No send action was performed to dispatch the message/invitation."
+                return False, "Objective requested dispatch/sharing, but no send, submit, or return action was executed to complete it."
 
-        # 2. Note and attachment verification
-        if "note" in task_lower and any(w in task_lower for w in ("screenshot", "image", "photo", "attach")):
-            has_screenshot = any("screenshot" in h.lower() or "paste" in h.lower() or "attachment" in h.lower() for h in history)
-            if not has_screenshot:
-                return False, "Screenshot was not taken or pasted into the note."
+        # 2. Media / capture / attachment objective verification
+        if any(m in task_lower for m in ("screenshot", "capture", "image", "photo", "picture", "attach", "attachment", "card")):
+            has_media = any(any(m in h.lower() for m in ("screenshot", "paste", "attachment", "image", "photo")) for h in history)
+            if not has_media:
+                return False, "Objective requested capturing or attaching media, but no screenshot or attachment action was found in execution history."
 
-        # 3. Calculation verification
-        if any(w in task_lower for w in ("calculator", "calculate", "math", "(12 + 8)", "126.5")):
-            has_calc = any("calc" in h.lower() or "click" in h.lower() for h in history)
+        # 3. Computation / calculation objective verification
+        math_terms = ("calculate", "computation", "compute", "math", "evaluate", "solve", "sum", "multiply", "divide")
+        has_math_op = any(op in task for op in ("+", "*", "/", "=")) and any(c.isdigit() for c in task)
+        if any(m in task_lower for m in math_terms) or has_math_op:
+            has_calc = any((("calc" in h.lower() and "open" not in h.lower()) or any(s in h.lower() for s in ("click", "equals", "keypad", "+", "*", "/", "-"))) for h in history)
             if not has_calc:
-                return False, "Calculator operations were not executed."
+                return False, "Objective requested computation, but no calculation or keypad actions were performed."
 
-        # 4. Jev verification check if available
+        # 4. Creation objective verification
+        creation_verbs = ("create", "write", "compose", "draft", "make", "new", "add", "record")
+        is_creation = any(v in words or any(w.startswith(v) for w in words) for v in creation_verbs)
+        is_dispatch = any(v in words or any(w.startswith(v) for w in words) for v in dispatch_verbs)
+        if is_creation and not is_dispatch:
+            has_input = any(any(k in h.lower() for k in ("type", "paste", "new_item", "create", "write")) for h in history)
+            if not has_input:
+                return False, "Objective requested creating or writing content, but no text input or document creation action was executed."
+
+        # 5. Jev verification check if available
         if self.jev and els:
             try:
                 p = self.jev.check(f"Has this entire task been accomplished? Task: '{task}'", app, els)
@@ -216,7 +330,7 @@ class Agent:
             except Exception:
                 pass
 
-        return True, "Task verified"
+        return True, "Task verified: all objective conditions satisfied"
 
     def run_jev(self, task: str) -> str:
         """Jev picks op + target + text + app in one request per turn, from the AX tree."""
@@ -242,7 +356,22 @@ class Agent:
                     misses = 0
                     continue
                 return self._report(f"done (verified; jev p={d['op_p']:.2f})")
-            stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)
+
+            # Evaluate stuck / loop state using native Rust policy engine
+            lib = _load_native_lib()
+            stuck = False
+            if lib and hasattr(lib, "cu_evaluate_agent_stuck"):
+                try:
+                    import json
+                    raw = lib.cu_evaluate_agent_stuck(op.encode("utf-8"), misses, json.dumps(list(recent)).encode("utf-8"))
+                    if raw:
+                        stuck_data = json.loads(raw.decode("utf-8"))
+                        stuck = stuck_data.get("should_escalate_or_pause", False)
+                except Exception:
+                    stuck = False
+            if not stuck:
+                stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)
+
             if stuck or (self.gemini and d["op_p"] < 0.35):
                 if not self.gemini:
                     # Prompt user for guidance and learn from demonstration!
@@ -267,7 +396,7 @@ class Agent:
 
             label = (el.label if el else "").lower()
             if self.confirm_all or (op in ("CLICK", "DOUBLE_CLICK", "PRESS_ENTER") and not self.allow_risky
-                                    and any(w in label for w in RISKY_WORDS)):
+                                    and is_risky_action(op, label, desc)):
                 if not self.confirm(f"About to: {desc}. Proceed?"):
                     return self._report("stopped: user declined")
             try:
@@ -288,30 +417,16 @@ class Agent:
         if op in ("CLICK", "DOUBLE_CLICK"):
             actions.click(el.x, el.y, clicks=2 if op == "DOUBLE_CLICK" else 1)
         elif op == "TYPE":
-            # Communication safety check
+            # Communication safety check (native Rust)
             check_typing_safety(d["text"], el, d.get("app", ""), els)
-            # Safety Guard: Never write into an existing document when the user asked to create a new one!
-            if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
-                is_create = any(w in task.lower() for w in ("create", "new note", "new doc", "write a new"))
-                is_explicit = el.label.lower() in task.lower()
-                if is_create and not is_explicit:
-                    raise RuntimeError(
-                        f"Safety Guard: Refusing to type into existing document '{el.label[:30]}...' "
-                        f"when task asked to create a new item. Ensure a blank new document is open."
-                    )
+            # Safety Guard: Never write into an existing document when creating a new one (native Rust)
+            check_document_write_safety(task, el)
             if el is not None and not el.focused:
                 actions.click(el.x, el.y)
             actions.type_text(d["text"], clear=el is not None and el.role != "AXTextArea")
         elif op == "PASTE":
-            # Safety Guard: Never paste into an existing document when creating a new one!
-            if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
-                is_create = any(w in task.lower() for w in ("create", "new note", "new doc", "write a new"))
-                is_explicit = el.label.lower() in task.lower()
-                if is_create and not is_explicit:
-                    raise RuntimeError(
-                        f"Safety Guard: Refusing to paste into existing document '{el.label[:30]}...' "
-                        f"when task asked to create a new item."
-                    )
+            # Safety Guard: Never paste into an existing document when creating a new one (native Rust)
+            check_document_write_safety(task, el)
             if el is not None and not el.focused:
                 actions.click(el.x, el.y)
             if any(w in task.lower() for w in ("screenshot", "image", "photo", "card")) and os.path.exists("/tmp/about_macos.png"):
@@ -400,14 +515,7 @@ class Agent:
             actions.click(el.x, el.y, clicks=2 if kind == "double_click" else 1)
         elif kind == "type":
             check_typing_safety(s["text"], el, app, els)
-            if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
-                is_create = any(w in s.get("do", "").lower() for w in ("create", "new note", "new doc", "write a new"))
-                is_explicit = el.label.lower() in s.get("do", "").lower() or el.label.lower() in s.get("target", "").lower()
-                if is_create and not is_explicit:
-                    raise RuntimeError(
-                        f"Safety Guard: Refusing to type into existing document '{el.label[:30]}...' "
-                        f"when step asked to create a new item."
-                    )
+            check_document_write_safety(s.get("do", "") or s.get("target", ""), el)
             actions.click(el.x, el.y)
             actions.type_text(s["text"], press_enter=s.get("enter", False), clear=el.role != "AXTextArea")
         elif kind == "scroll":

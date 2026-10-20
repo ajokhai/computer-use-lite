@@ -175,6 +175,24 @@ def _load_native_lib():
                 if hasattr(lib, "cu_memory_free_string"):
                     lib.cu_memory_free_string.argtypes = [ctypes.c_char_p]
                     lib.cu_memory_free_string.restype = None
+                if hasattr(lib, "cu_check_typing_safety"):
+                    lib.cu_check_typing_safety.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+                    lib.cu_check_typing_safety.restype = ctypes.c_char_p
+                if hasattr(lib, "cu_check_doc_safety"):
+                    lib.cu_check_doc_safety.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+                    lib.cu_check_doc_safety.restype = ctypes.c_char_p
+                if hasattr(lib, "cu_is_risky_action"):
+                    lib.cu_is_risky_action.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+                    lib.cu_is_risky_action.restype = ctypes.c_bool
+                if hasattr(lib, "cu_verify_task_completion"):
+                    lib.cu_verify_task_completion.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+                    lib.cu_verify_task_completion.restype = ctypes.c_char_p
+                if hasattr(lib, "cu_evaluate_agent_stuck"):
+                    lib.cu_evaluate_agent_stuck.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
+                    lib.cu_evaluate_agent_stuck.restype = ctypes.c_char_p
+                if hasattr(lib, "cu_extract_text_candidates"):
+                    lib.cu_extract_text_candidates.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+                    lib.cu_extract_text_candidates.restype = ctypes.c_char_p
 
                 _NATIVE_LIB = lib
                 return _NATIVE_LIB
