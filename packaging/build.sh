@@ -11,10 +11,17 @@ SIGN=$(security find-certificate -c "Computer Use Local Signing" -Z 2>/dev/null 
 SIGN=${SIGN:--}
 VERSION=$(uv run python -c 'import cu;print(cu.__version__)')  # the single source of truth is cu/__init__.py
 DMG="../Computer Use $VERSION.dmg"
+
+# Build native Rust acceleration core
+if [ -f "$PWD/crates/cu-native/Cargo.toml" ]; then
+    ~/.cargo/bin/cargo build --release --manifest-path "$PWD/crates/cu-native/Cargo.toml"
+fi
+
 uv run pyinstaller --noconfirm --windowed --name "Computer Use" \
   --distpath "$OUT/dist" --workpath "$OUT/work" --specpath "$OUT" \
   --icon "$PWD/packaging/AppIcon.icns" \
   --osx-bundle-identifier com.computeruse.lite \
+  --add-binary "$PWD/crates/cu-native/target/release/libcu_native.dylib:." \
   --collect-submodules google.genai --collect-data google.genai --exclude-module google.genai.tests \
   --collect-submodules mcp.server --collect-submodules mcp.shared --exclude-module mcp.cli \
   --collect-submodules rumps --paths "$PWD" --collect-submodules cu \

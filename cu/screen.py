@@ -107,8 +107,63 @@ def is_on_screen(x: int, y: int) -> bool:
     return False
 
 
+_NATIVE_LIB = None
+
+def _load_native_lib():
+    global _NATIVE_LIB
+    if _NATIVE_LIB is not None:
+        return _NATIVE_LIB
+    import ctypes
+    import sys
+    from pathlib import Path
+    candidates = [
+        Path(__file__).resolve().parent.parent / "crates" / "cu-native" / "target" / "release" / "libcu_native.dylib",
+    ]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidates.insert(0, Path(sys._MEIPASS) / "libcu_native.dylib")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                lib = ctypes.CDLL(str(candidate))
+                lib.cu_walk_ax_tree_json.argtypes = [ctypes.c_size_t]
+                lib.cu_walk_ax_tree_json.restype = ctypes.c_char_p
+                lib.cu_free_string.argtypes = [ctypes.c_char_p]
+                lib.cu_free_string.restype = None
+                _NATIVE_LIB = lib
+                return _NATIVE_LIB
+            except Exception:
+                pass
+    return None
+
+
 def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Element]]:
     """Walk the frontmost app's AX tree and return on-screen actionable elements."""
+    lib = _load_native_lib()
+    if lib:
+        try:
+            import json
+            raw = lib.cu_walk_ax_tree_json(limit)
+            if raw:
+                data = json.loads(raw.decode("utf-8"))
+                app_name = data.get("app", "Unknown")
+                elements = [
+                    Element(
+                        id=e["id"],
+                        role=e["role"],
+                        label=e["label"],
+                        x=e["x"],
+                        y=e["y"],
+                        w=e["w"],
+                        h=e["h"],
+                        focused=e.get("focused", False),
+                    )
+                    for e in data.get("elements", [])
+                ]
+                return app_name, elements
+        except Exception:
+            pass
+
     app_name, pid = frontmost_app()
     root = AXUIElementCreateApplication(pid)
     focused = _attr(root, "AXFocusedUIElement")
