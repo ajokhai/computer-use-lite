@@ -24,7 +24,18 @@ def key_name(k: str) -> str:
     return KEY_ALIASES.get(k.lower().replace("_", ""), k.lower())
 
 
+def move_to(x, y, duration=0.25):
+    """Smoothly glide the cursor across the screen so the user can follow along."""
+    try:
+        pyautogui.moveTo(x, y, duration=duration, tween=pyautogui.easeOutQuad)
+    except Exception:
+        pyautogui.moveTo(x, y)
+
+
 def click(x, y, button="left", clicks=1):
+    from . import indicator
+    move_to(x, y, duration=0.25)
+    indicator.show_click_ring(x, y)
     pyautogui.click(x, y, clicks=clicks, interval=0.08, button=button)
 
 
@@ -51,7 +62,9 @@ def hotkey(keys):
 
 
 def scroll(x, y, direction="down", amount=300):
-    pyautogui.moveTo(x, y)
+    from . import indicator
+    move_to(x, y, duration=0.2)
+    indicator.show_click_ring(x, y)
     # pyautogui scroll units are lines on macOS; ~10px each.
     lines = max(1, int(amount / 10))
     if direction in ("up", "down"):
@@ -61,7 +74,9 @@ def scroll(x, y, direction="down", amount=300):
 
 
 def drag(x1, y1, x2, y2):
-    pyautogui.moveTo(x1, y1)
+    from . import indicator
+    move_to(x1, y1, duration=0.2)
+    indicator.show_click_ring(x1, y1)
     pyautogui.dragTo(x2, y2, duration=0.4, button="left")
 
 
