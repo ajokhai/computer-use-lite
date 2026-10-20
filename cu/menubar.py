@@ -201,6 +201,7 @@ class MenuBar(rumps.App):
         timer.stop()
         NSApplication.sharedApplication().setActivationPolicy_(1)  # menu bar only, no Dock icon
         self.set_icon(IDLE_ICON)
+        self._install_hotkey()
         if self.settings["hands_free"]:
             self.ensure_voice(self._listen)
 
@@ -511,6 +512,7 @@ class MenuBar(rumps.App):
         self.settings["voice_shortcut"] = key
         save_settings(self.settings)
         self.build_voice_shortcut_menu()
+        self._install_hotkey()
         if hasattr(self, "prompt_bar") and self.prompt_bar:
             self.prompt_bar.update_voice_shortcut_hint()
 
@@ -553,93 +555,68 @@ class MenuBar(rumps.App):
             self._monitors = []
 
         talk_mods = NSEventModifierFlagControl | NSEventModifierFlagOption
-        MODIFIER_MASK = (
-            NSEventModifierFlagControl
-            | NSEventModifierFlagOption
-            | NSEventModifierFlagCommand
-            | NSEventModifierFlagShift
-            | NSEventModifierFlagFunction
-        )
-
-        def hit_talk(event):
-            return event.keyCode() == SPACE_KEY and (event.modifierFlags() & talk_mods) == talk_mods
+        MOD_KEYCODES = {
+            "control": {59, 62},
+            "option": {58, 61},
+            "command": {55, 54},
+            "shift": {56, 60},
+            "fn": {63},
+        }
 
         tap_state = {
-            "down": False,
+            "is_down": False,
             "last_release": 0.0,
-            "phase": 0,
-            "holding": False,
-            "hold_timer": None,
         }
 
         def on_key_down(event):
-            if hit_talk(event):
-                self.events.put(("talk", None))
+            # Check ⌃⌥Space
+            if event.keyCode() == SPACE_KEY and (event.modifierFlags() & talk_mods) == talk_mods:
+                self.talk_now()
                 return None
 
             info = self.get_voice_shortcut_info()
             if info.get("type") == "key" and event.keyCode() == info.get("keyCode"):
-                self.events.put(("voice_toggle", None))
+                self.toggle_voice_mode()
                 return None
 
-            # Normal key press cancels pending modifier tap sequence so shortcuts like Ctrl+C work safely
-            if tap_state["phase"] > 0:
-                tap_state["phase"] = 0
-                tap_state["down"] = False
-                if tap_state["hold_timer"]:
-                    tap_state["hold_timer"].cancel()
-                    tap_state["hold_timer"] = None
-
+            # Normal key press cancels any pending double tap
+            tap_state["is_down"] = False
+            tap_state["last_release"] = 0.0
             return event
 
         def on_flags_changed(event):
-            info = self.get_voice_shortcut_info()
-            if info.get("type") != "modifier":
-                return
-
+            shortcut = self.settings.get("voice_shortcut", "control")
+            target_codes = MOD_KEYCODES.get(shortcut, {59, 62})
+            code = event.keyCode()
             flags = event.modifierFlags()
-            active_mods = flags & MODIFIER_MASK
-            target_mask = info.get("mask", NSEventModifierFlagControl)
-            is_target_down = (active_mods == target_mask)
+
+            # Identify if the target modifier is currently engaged
+            if shortcut == "control":
+                is_pressed = bool(flags & NSEventModifierFlagControl) and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagOption))
+            elif shortcut == "option":
+                is_pressed = bool(flags & NSEventModifierFlagOption) and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl))
+            elif shortcut == "command":
+                is_pressed = bool(flags & NSEventModifierFlagCommand) and not bool(flags & (NSEventModifierFlagControl | NSEventModifierFlagOption))
+            elif shortcut == "shift":
+                is_pressed = bool(flags & NSEventModifierFlagShift) and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl))
+            elif shortcut == "fn":
+                is_pressed = bool(flags & NSEventModifierFlagFunction)
+            elif shortcut == "control_option":
+                is_pressed = (flags & talk_mods) == talk_mods and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagShift))
+            else:
+                is_pressed = (code in target_codes) and bool(flags & NSEventModifierFlagControl)
+
             now = time.monotonic()
-
-            if is_target_down and not tap_state["down"]:
-                tap_state["down"] = True
-                if tap_state["phase"] == 1 and (now - tap_state["last_release"]) <= 0.40:
-                    tap_state["phase"] = 2
-
-                    def fire_hold():
-                        if tap_state["down"] and tap_state["phase"] == 2 and not tap_state["holding"]:
-                            tap_state["holding"] = True
-                            self.events.put(("voice_hold_start", None))
-
-                    t = threading.Timer(0.28, fire_hold)
-                    t.daemon = True
-                    tap_state["hold_timer"] = t
-                    t.start()
-                else:
-                    tap_state["phase"] = 1
-            elif not is_target_down and tap_state["down"]:
-                tap_state["down"] = False
-                if tap_state["hold_timer"]:
-                    tap_state["hold_timer"].cancel()
-                    tap_state["hold_timer"] = None
-
-                if tap_state["phase"] == 2:
-                    if tap_state["holding"]:
-                        tap_state["holding"] = False
-                        self.events.put(("voice_hold_end", None))
-                    else:
-                        self.events.put(("voice_toggle", None))
-                    tap_state["phase"] = 0
-                elif tap_state["phase"] == 1:
-                    tap_state["last_release"] = now
-
-                    def reset_phase():
-                        if not tap_state["down"] and tap_state["phase"] == 1:
-                            tap_state["phase"] = 0
-
-                    threading.Timer(0.40, reset_phase).start()
+            if is_pressed and not tap_state["is_down"]:
+                tap_state["is_down"] = True
+                delta = now - tap_state["last_release"]
+                if tap_state["last_release"] > 0 and 0.04 <= delta <= 0.65:
+                    # Double-tap confirmed! Trigger immediately on second press
+                    tap_state["last_release"] = 0.0
+                    self.toggle_voice_mode()
+            elif not is_pressed and tap_state["is_down"]:
+                tap_state["is_down"] = False
+                tap_state["last_release"] = now
 
         def on_global(event):
             on_key_down(event)
