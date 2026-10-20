@@ -175,31 +175,41 @@ def run_verified_benchmark():
     # ---------------------------------------------------------
     # STAGE 4: Notes: Safe Note Creation & Embed Cropped Screenshot
     # ---------------------------------------------------------
-    print("\n>>> [4/5] Notes: Safe Note Creation & Embedded Cropped Screenshot")
+    print("\n>>> [4/5] Notes: Safe Note Creation & Embed Cropped Screenshot")
     focus_app("Notes", "com.apple.Notes")
     time.sleep(0.3)
 
-    report_title = "Calculation & macOS Audit Report"
+    import datetime
+    run_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report_title = f"Calculation & macOS Audit Report [{run_timestamp}]"
     html_body = f"""<h1>{report_title}</h1>
 <p><strong>1. Initial Math:</strong> (12 + 8) * 5 = 100</p>
 <p><strong>2. macOS Version (from System Settings UI):</strong> {version_str}</p>
 <p><strong>3. Final Combined Calculation:</strong> 100 + {version_str} = 126.5</p>
 <p><strong>Cropped Screenshot of System Settings About page attached below:</strong></p>"""
 
-    # Create new note cleanly and attach the cropped screenshot
+    # Create new note cleanly, attach cropped screenshot, and explicitly navigate Notes UI to it
     apple_script = f'''
     tell application "Notes"
+        activate
         set newNote to make new note with properties {{name:"{report_title}", body:"{html_body}"}}
         make new attachment at end of newNote with data (POSIX file "{screenshot_path}")
+        show newNote
         return count of attachments of newNote
     end tell
     '''
     res = subprocess.run(["osascript", "-e", apple_script], capture_output=True, text=True)
     att_count = res.stdout.strip()
-    print(f"  [Verification 4] Note created with {att_count} embedded attachment(s)")
+    print(f"  [Verification 4A] Note created: '{report_title}' with {att_count} embedded attachment(s)")
     assert int(att_count or 0) >= 1, "Accuracy Error: Note did not receive the image attachment"
-    time.sleep(0.4)
-    print("  ✓ Stage 4 Passed: Clean note created with embedded cropped screenshot of About page.")
+    time.sleep(0.5)
+
+    # Verification 4B: Verify Notes UI editor is displaying THIS note
+    _, els = ax_elements(limit=100)
+    note_active = any(report_title in e.label for e in els)
+    print(f"  [Verification 4B] Active note in Notes UI editor verified: {note_active}")
+    assert note_active, f"Accuracy Error: Notes UI failed to display '{report_title}'"
+    print("  ✓ Stage 4 Passed: Clean note created, attached cropped screenshot, and verified active in UI.")
 
     # ---------------------------------------------------------
     # STAGE 5: Share Note to Mr. Josh via Messages & Verify
@@ -207,6 +217,10 @@ def run_verified_benchmark():
     print("\n>>> [5/5] Share Note: Native Share -> Messages -> Send to Mr. Josh")
     focus_app("Notes", "com.apple.Notes")
     time.sleep(0.3)
+
+    # Pre-verification: Ensure the note being shared is indeed the new note
+    _, els = ax_elements(limit=100)
+    assert any(report_title in e.label for e in els), f"Accuracy Error: Wrong note active in Notes: expected {report_title}"
 
     # Open Share sheet via menu or toolbar
     _, els = ax_elements(limit=120)
@@ -225,9 +239,15 @@ def run_verified_benchmark():
         actions.click(msg_opt.x, msg_opt.y)
     time.sleep(1.0)
 
-    # Click To: field at (-974, -305) and type Mr. Josh
-    actions.click(-974, -305)
+    # Target To: field dynamically or fall back
+    _, els = ax_elements(limit=120)
+    to_field = next((e for e in els if e.role in ("AXTextField", "AXComboBox") and any(k in e.label.lower() for k in ("to", "recipient", "address", "search"))), None)
+    if to_field:
+        actions.click(to_field.x, to_field.y)
+    else:
+        actions.click(-974, -305)
     time.sleep(0.2)
+
     actions.type_text("Mr. Josh", press_enter=True)
     time.sleep(0.6)
 
@@ -247,7 +267,7 @@ def run_verified_benchmark():
     time.sleep(0.2)
     actions.hotkey(["command", "return"])
     time.sleep(0.2)
-    pyautogui.press("return")
+    actions.hotkey(["return"])
     time.sleep(1.0)
 
     # Self-Correcting Post-Verification: Confirm in Messages transcript!
@@ -255,7 +275,7 @@ def run_verified_benchmark():
     time.sleep(0.5)
     _, els_msg = ax_elements(limit=100)
 
-    delivered = any("calculation" in e.label.lower() or "audit report" in e.label.lower() or "shared from notes" in e.label.lower() for e in els_msg)
+    delivered = any("calculation" in e.label.lower() or "audit report" in e.label.lower() or run_timestamp in e.label.lower() or "shared from notes" in e.label.lower() for e in els_msg)
     print(f"  [Verification 5B] Delivery verified in Messages transcript: {delivered}")
     assert delivered, "Accuracy Error: Note link was not delivered to Mr. Josh in Messages"
     print("  ✓ Stage 5 Passed: Collaborative note invitation verifiably delivered to Mr. Josh.")

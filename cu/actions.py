@@ -26,6 +26,14 @@ def key_name(k: str) -> str:
 
 def move_to(x, y, duration=0.12):
     """Smoothly glide the cursor across the screen so the user can follow along."""
+    from .screen import _load_native_lib
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_move_to"):
+        try:
+            lib.cu_move_to(float(x), float(y), float(duration * 1000.0))
+            return
+        except Exception:
+            pass
     try:
         pyautogui.moveTo(x, y, duration=duration, tween=pyautogui.easeOutQuad)
     except Exception:
@@ -34,28 +42,41 @@ def move_to(x, y, duration=0.12):
 
 def click(x, y, button="left", clicks=1):
     from . import indicator
-    move_to(x, y, duration=0.12)
+    from .screen import _load_native_lib
+    move_to(x, y, duration=0.10)
     indicator.show_click_ring(x, y)
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_click"):
+        try:
+            btn_code = 1 if button == "right" else 0
+            lib.cu_click(float(x), float(y), btn_code, int(clicks))
+            return
+        except Exception:
+            pass
     pyautogui.click(x, y, clicks=clicks, interval=0.04, button=button)
 
 
 def paste():
     """Paste the clipboard content (press Command-V)."""
-    pyautogui.hotkey("command", "v")
+    hotkey(["command", "v"])
     time.sleep(0.08)
 
 
 def copy_image_to_clipboard(path: str = "/tmp/cu_screenshot.png") -> bool:
     """Put image data onto the general pasteboard via Cocoa."""
     try:
-        from Cocoa import NSPasteboard, NSImage, NSURL
+        from Cocoa import NSPasteboard, NSImage, NSURL, NSPasteboardTypePNG, NSData
         url = NSURL.fileURLWithPath_(str(path))
         img = NSImage.alloc().initWithContentsOfURL_(url)
         if img:
+            data = NSData.dataWithContentsOfURL_(url)
             pb = NSPasteboard.generalPasteboard()
             pb.clearContents()
             pb.writeObjects_([img])
-            time.sleep(0.08)
+            if data:
+                pb.setData_forType_(data, NSPasteboardTypePNG)
+                pb.setData_forType_(data, "public.png")
+            time.sleep(0.06)
             return True
     except Exception:
         pass
@@ -64,35 +85,45 @@ def copy_image_to_clipboard(path: str = "/tmp/cu_screenshot.png") -> bool:
 
 def screenshot_to_clipboard(rect=None, path: str = "/tmp/cu_screenshot.png"):
     """Capture the screen or a region to disk, then put image data onto the clipboard."""
-    cmd = ["screencapture", "-x"]
-    if rect:
-        x, y, w, h = rect
-        cmd.append(f"-R{x},{y},{w},{h}")
-    cmd.append(path)
-    subprocess.run(cmd, check=True)
+    from .screen import _load_native_lib
+    lib = _load_native_lib()
+    captured = False
+    if lib and hasattr(lib, "cu_capture_to_file"):
+        try:
+            x, y, w, h = (float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3])) if rect else (0.0, 0.0, 0.0, 0.0)
+            captured = bool(lib.cu_capture_to_file(x, y, w, h, path.encode("utf-8")))
+        except Exception:
+            captured = False
+    if not captured:
+        cmd = ["screencapture", "-x"]
+        if rect:
+            x, y, w, h = rect
+            cmd.append(f"-R{int(x)},{int(y)},{int(w)},{int(h)}")
+        cmd.append(path)
+        subprocess.run(cmd, check=True)
     copy_image_to_clipboard(path)
-    time.sleep(0.1)
+    time.sleep(0.08)
 
 
 def paste_image(path: str = "/tmp/cu_screenshot.png"):
     """Ensure the image is freshly placed on the pasteboard, then paste."""
     copy_image_to_clipboard(path)
-    pyautogui.hotkey("command", "v")
+    hotkey(["command", "v"])
     time.sleep(0.15)
 
 
 def type_text(text: str, press_enter=False, clear=False):
     if clear:
-        pyautogui.hotkey("command", "a")
-        pyautogui.press("backspace")
+        hotkey(["command", "a"])
+        hotkey(["backspace"])
     # Paste via the clipboard: fast, and handles non-ASCII that typewrite cannot.
     old = subprocess.run(["pbpaste"], capture_output=True).stdout
     subprocess.run(["pbcopy"], input=text.encode(), check=True)
-    pyautogui.hotkey("command", "v")
+    hotkey(["command", "v"])
     time.sleep(0.05)
     subprocess.run(["pbcopy"], input=old)
     if press_enter:
-        pyautogui.press("return")
+        hotkey(["return"])
 
 
 def create_new_document(app_name: str | None = None) -> bool:
@@ -114,6 +145,15 @@ def create_new_document(app_name: str | None = None) -> bool:
 
 
 def hotkey(keys):
+    from .screen import _load_native_lib
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_hotkey"):
+        try:
+            csv_keys = ",".join(keys).encode("utf-8")
+            lib.cu_hotkey(csv_keys)
+            return
+        except Exception:
+            pass
     keys = [key_name(k) for k in keys]
     if len(keys) == 1:
         pyautogui.press(keys[0])
@@ -123,10 +163,19 @@ def hotkey(keys):
 
 def scroll(x, y, direction="down", amount=300):
     from . import indicator
-    move_to(x, y, duration=0.1)
+    from .screen import _load_native_lib
+    move_to(x, y, duration=0.08)
     indicator.show_click_ring(x, y)
-    # pyautogui scroll units are lines on macOS; ~10px each.
     lines = max(1, int(amount / 10))
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_scroll"):
+        try:
+            dy = lines if direction == "up" else (-lines if direction == "down" else 0)
+            dx = lines if direction == "right" else (-lines if direction == "left" else 0)
+            lib.cu_scroll(dy, dx)
+            return
+        except Exception:
+            pass
     if direction in ("up", "down"):
         pyautogui.scroll(lines if direction == "up" else -lines)
     else:
@@ -135,8 +184,16 @@ def scroll(x, y, direction="down", amount=300):
 
 def drag(x1, y1, x2, y2):
     from . import indicator
-    move_to(x1, y1, duration=0.1)
+    from .screen import _load_native_lib
+    move_to(x1, y1, duration=0.08)
     indicator.show_click_ring(x1, y1)
+    lib = _load_native_lib()
+    if lib and hasattr(lib, "cu_drag"):
+        try:
+            lib.cu_drag(float(x1), float(y1), float(x2), float(y2), 250.0)
+            return
+        except Exception:
+            pass
     pyautogui.dragTo(x2, y2, duration=0.25, button="left")
 
 

@@ -53,7 +53,15 @@ def screen_size() -> tuple[int, int]:
 def screenshot_png(max_width: int = 1440) -> bytes:
     """Capture the main display, downscaled from Retina pixels so tokens stay low."""
     with tempfile.NamedTemporaryFile(suffix=".png") as f:
-        subprocess.run(["screencapture", "-x", "-C", "-m", f.name], check=True)
+        lib = _load_native_lib()
+        captured = False
+        if lib and hasattr(lib, "cu_capture_to_file"):
+            try:
+                captured = bool(lib.cu_capture_to_file(0.0, 0.0, 0.0, 0.0, f.name.encode("utf-8")))
+            except Exception:
+                captured = False
+        if not captured:
+            subprocess.run(["screencapture", "-x", "-C", "-m", f.name], check=True)
         img = Image.open(f.name)
         img.load()
     pw, _ = screen_size()
@@ -130,6 +138,32 @@ def _load_native_lib():
                 lib.cu_walk_ax_tree_json.restype = ctypes.c_char_p
                 lib.cu_free_string.argtypes = [ctypes.c_char_p]
                 lib.cu_free_string.restype = None
+
+                if hasattr(lib, "cu_click"):
+                    lib.cu_click.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_uint32, ctypes.c_size_t]
+                    lib.cu_click.restype = None
+                if hasattr(lib, "cu_move_to"):
+                    lib.cu_move_to.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double]
+                    lib.cu_move_to.restype = None
+                if hasattr(lib, "cu_mouse_pos"):
+                    lib.cu_mouse_pos.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+                    lib.cu_mouse_pos.restype = None
+                if hasattr(lib, "cu_key_press"):
+                    lib.cu_key_press.argtypes = [ctypes.c_uint16, ctypes.c_uint64]
+                    lib.cu_key_press.restype = None
+                if hasattr(lib, "cu_hotkey"):
+                    lib.cu_hotkey.argtypes = [ctypes.c_char_p]
+                    lib.cu_hotkey.restype = None
+                if hasattr(lib, "cu_scroll"):
+                    lib.cu_scroll.argtypes = [ctypes.c_int32, ctypes.c_int32]
+                    lib.cu_scroll.restype = None
+                if hasattr(lib, "cu_drag"):
+                    lib.cu_drag.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
+                    lib.cu_drag.restype = None
+                if hasattr(lib, "cu_capture_to_file"):
+                    lib.cu_capture_to_file.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_char_p]
+                    lib.cu_capture_to_file.restype = ctypes.c_bool
+
                 _NATIVE_LIB = lib
                 return _NATIVE_LIB
             except Exception:

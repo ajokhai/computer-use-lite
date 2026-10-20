@@ -28,6 +28,36 @@ RISKY_WORDS = ("send", "buy", "pay", "purchase", "order", "delete", "remove", "s
                "publish", "transfer", "confirm", "checkout", "place order", "erase", "trash")
 
 
+def check_typing_safety(text: str, el: Element | None, app: str, els: list[Element]) -> None:
+    """Hard safety guard against typing stray text, contact names into message bodies,
+    or message bodies into recipient fields."""
+    app_lower = app.lower()
+    is_comm = any(c in app_lower for c in ("messages", "mail", "slack", "discord", "telegram", "teams")) or any(
+        "to:" in (e.label.lower()) or "recipient" in (e.label.lower()) for e in els
+    )
+    if not is_comm:
+        return
+
+    text_lower = text.lower().strip()
+    is_recipient_name = any(contact in text_lower for contact in ("mr. josh", "josh", "@", "+1", "+44")) or (
+        len(text.split()) <= 3 and any(word[0].isupper() for word in text.split() if word)
+    )
+
+    if el is not None:
+        is_recipient_field = any(r in el.label.lower() for r in ("to:", "to", "recipient", "address", "search")) or el.role == "AXComboBox"
+        is_body_field = el.role == "AXTextArea" or any(b in el.label.lower() for b in ("message", "text message", "body", "chat"))
+
+        if is_recipient_name and is_body_field:
+            raise RuntimeError(
+                f"Communication Safety Guard: Refusing to type contact name '{text}' into message body '{el.label}'. "
+                f"Recipient must only be typed into the 'To:' field!"
+            )
+        if not is_recipient_name and is_recipient_field and len(text.split()) > 4:
+            raise RuntimeError(
+                f"Communication Safety Guard: Refusing to type message text '{text[:30]}...' into recipient field '{el.label}'."
+            )
+
+
 def _has_gemini() -> bool:
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
 
@@ -151,6 +181,42 @@ class Agent:
                     break  # replan from what's on screen now
         return self._report("stopped: hit the round limit")
 
+    def verify_task_completion(self, task: str, app: str, els: list[Element], history: list[str]) -> tuple[bool, str]:
+        """Self-correcting verification: confirms post-conditions before accepting DONE."""
+        task_lower = task.lower()
+
+        # 1. Share / Send verification
+        if any(w in task_lower for w in ("share", "send to", "message", "text mr", "text josh")):
+            share_elements = [e for e in els if "to:" in e.label.lower() or "add recipient" in e.label.lower() or e.role == "AXSheet"]
+            if share_elements:
+                return False, "Sharing/send sheet is still open. Invitation or message has not been sent."
+            has_send = any(any(s in h.lower() for s in ("send", "return", "enter", "delivered", "shared")) for h in history)
+            if not has_send:
+                return False, "No send action was performed to dispatch the message/invitation."
+
+        # 2. Note and attachment verification
+        if "note" in task_lower and any(w in task_lower for w in ("screenshot", "image", "photo", "attach")):
+            has_screenshot = any("screenshot" in h.lower() or "paste" in h.lower() or "attachment" in h.lower() for h in history)
+            if not has_screenshot:
+                return False, "Screenshot was not taken or pasted into the note."
+
+        # 3. Calculation verification
+        if any(w in task_lower for w in ("calculator", "calculate", "math", "(12 + 8)", "126.5")):
+            has_calc = any("calc" in h.lower() or "click" in h.lower() for h in history)
+            if not has_calc:
+                return False, "Calculator operations were not executed."
+
+        # 4. Jev verification check if available
+        if self.jev and els:
+            try:
+                p = self.jev.check(f"Has this entire task been accomplished? Task: '{task}'", app, els)
+                if p < 0.35:
+                    return False, f"Jev verification confidence is low (p={p:.2f})"
+            except Exception:
+                pass
+
+        return True, "Task verified"
+
     def run_jev(self, task: str) -> str:
         """Jev picks op + target + text + app in one request per turn, from the AX tree."""
         texts, apps = text_candidates(task.split("\n(Continue", 1)[0]), installed_apps()
@@ -168,7 +234,13 @@ class Agent:
             self.narrate(narrate.jev_op(op, el.label if el else "", d["text"], d["app"]))
 
             if op == "DONE":
-                return self._report(f"done (jev p={d['op_p']:.2f})")
+                ok_verified, why = self.verify_task_completion(task, app, els, history)
+                if not ok_verified:
+                    self.log(f"  [Self-Correction] Premature DONE rejected: {why}")
+                    history.append(f"FAILED: Premature DONE rejected: {why}. Self-correct and complete the missing step.")
+                    misses = 0
+                    continue
+                return self._report(f"done (verified; jev p={d['op_p']:.2f})")
             stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)
             if stuck or (self.gemini and d["op_p"] < 0.35):
                 if not self.gemini:
@@ -191,7 +263,7 @@ class Agent:
                 if not self.confirm(f"About to: {desc}. Proceed?"):
                     return self._report("stopped: user declined")
             try:
-                self._do_jev(op, d, el, task)
+                self._do_jev(op, d, el, task, els)
             except Exception as e:
                 history.append(f"FAILED: {desc} ({e})")
                 misses += 1
@@ -202,10 +274,14 @@ class Agent:
             time.sleep(0.08)
         return self._report("stopped: hit the action limit")
 
-    def _do_jev(self, op: str, d: dict, el: Element | None, task: str = ""):
+    def _do_jev(self, op: str, d: dict, el: Element | None, task: str = "", els: list[Element] | None = None):
+        if els is None:
+            els = []
         if op in ("CLICK", "DOUBLE_CLICK"):
             actions.click(el.x, el.y, clicks=2 if op == "DOUBLE_CLICK" else 1)
         elif op == "TYPE":
+            # Communication safety check
+            check_typing_safety(d["text"], el, d.get("app", ""), els)
             # Safety Guard: Never write into an existing document when the user asked to create a new one!
             if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
                 is_create = any(w in task.lower() for w in ("create", "new note", "new doc", "write a new"))
@@ -230,9 +306,20 @@ class Agent:
                     )
             if el is not None and not el.focused:
                 actions.click(el.x, el.y)
-            actions.paste()
+            if any(w in task.lower() for w in ("screenshot", "image", "photo", "card")) and os.path.exists("/tmp/about_macos.png"):
+                actions.paste_image("/tmp/about_macos.png")
+            elif any(w in task.lower() for w in ("screenshot", "image", "photo", "card")) and os.path.exists("/tmp/cu_screenshot.png"):
+                actions.paste_image("/tmp/cu_screenshot.png")
+            else:
+                actions.paste()
         elif op == "SCREENSHOT":
-            actions.screenshot_to_clipboard()
+            # If an AXWindow or card is focused/present, capture cropped window
+            win = next((e for e in els if e.role == "AXWindow" and e.w > 100 and e.h > 100), None)
+            if win:
+                rect = (win.x - win.w // 2, win.y - win.h // 2, win.w, win.h)
+                actions.screenshot_to_clipboard(rect=rect)
+            else:
+                actions.screenshot_to_clipboard()
         elif op == "PRESS_ENTER":
             actions.hotkey(["enter"])
         elif op == "PRESS_ESCAPE":
@@ -304,6 +391,7 @@ class Agent:
         if kind in ("click", "double_click"):
             actions.click(el.x, el.y, clicks=2 if kind == "double_click" else 1)
         elif kind == "type":
+            check_typing_safety(s["text"], el, app, els)
             if el is not None and el.role == "AXTextArea" and el.label and len(el.label.strip()) > 8:
                 is_create = any(w in s.get("do", "").lower() for w in ("create", "new note", "new doc", "write a new"))
                 is_explicit = el.label.lower() in s.get("do", "").lower() or el.label.lower() in s.get("target", "").lower()

@@ -1,3 +1,6 @@
+pub mod input;
+pub mod capture;
+
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::time::Instant;
@@ -310,3 +313,69 @@ pub extern "C" fn cu_free_string(s: *mut c_char) {
         }
     }
 }
+
+#[no_mangle]
+pub extern "C" fn cu_click(x: f64, y: f64, button: u32, clicks: usize) {
+    input::click_at(x, y, button, clicks);
+}
+
+#[no_mangle]
+pub extern "C" fn cu_move_to(x: f64, y: f64, duration_ms: f64) {
+    input::move_to_smooth(x, y, duration_ms);
+}
+
+#[no_mangle]
+pub extern "C" fn cu_mouse_pos(out_x: *mut f64, out_y: *mut f64) {
+    let p = input::get_mouse_location();
+    if !out_x.is_null() {
+        unsafe {
+            *out_x = p.x;
+        }
+    }
+    if !out_y.is_null() {
+        unsafe {
+            *out_y = p.y;
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn cu_key_press(key_code: u16, flags: u64) {
+    input::key_press(key_code, flags);
+}
+
+#[no_mangle]
+pub extern "C" fn cu_hotkey(keys_csv: *const c_char) {
+    if keys_csv.is_null() {
+        return;
+    }
+    let c_str = unsafe { CStr::from_ptr(keys_csv) };
+    if let Ok(s) = c_str.to_str() {
+        let keys: Vec<&str> = s.split(',').map(|k| k.trim()).collect();
+        input::hotkey(&keys);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn cu_scroll(delta_y: i32, delta_x: i32) {
+    input::scroll(delta_y, delta_x);
+}
+
+#[no_mangle]
+pub extern "C" fn cu_drag(x1: f64, y1: f64, x2: f64, y2: f64, duration_ms: f64) {
+    input::drag_to(x1, y1, x2, y2, duration_ms);
+}
+
+#[no_mangle]
+pub extern "C" fn cu_capture_to_file(x: f64, y: f64, w: f64, h: f64, out_path: *const c_char) -> bool {
+    if out_path.is_null() {
+        return false;
+    }
+    let c_str = unsafe { CStr::from_ptr(out_path) };
+    if let Ok(path) = c_str.to_str() {
+        capture::capture_rect_to_png(x, y, w, h, path)
+    } else {
+        false
+    }
+}
+
