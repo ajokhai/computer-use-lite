@@ -6,8 +6,19 @@ import subprocess
 import threading
 
 import rumps
-from AppKit import (NSApplication, NSEvent, NSEventMaskKeyDown, NSEventModifierFlagControl,
-                    NSEventModifierFlagOption, NSImage, NSWorkspace)
+from AppKit import (
+    NSApplication,
+    NSEvent,
+    NSEventMaskFlagsChanged,
+    NSEventMaskKeyDown,
+    NSEventModifierFlagCommand,
+    NSEventModifierFlagControl,
+    NSEventModifierFlagFunction,
+    NSEventModifierFlagOption,
+    NSEventModifierFlagShift,
+    NSImage,
+    NSWorkspace,
+)
 
 from . import __version__, integration, say, updater, usage, voicepack
 from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
@@ -15,6 +26,71 @@ from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save
 IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "exclamationmark.triangle"
 MIC_ICON = "mic.fill"
 SPACE_KEY = 49  # ⌃⌥Space starts/stops talking
+
+VOICE_SHORTCUTS = {
+    "control": {
+        "title": "Double-tap Control (Default)",
+        "short": "Control",
+        "symbol": "⌃",
+        "type": "modifier",
+        "mask": NSEventModifierFlagControl,
+    },
+    "option": {
+        "title": "Double-tap Option",
+        "short": "Option",
+        "symbol": "⌥",
+        "type": "modifier",
+        "mask": NSEventModifierFlagOption,
+    },
+    "command": {
+        "title": "Double-tap Command",
+        "short": "Command",
+        "symbol": "⌘",
+        "type": "modifier",
+        "mask": NSEventModifierFlagCommand,
+    },
+    "shift": {
+        "title": "Double-tap Shift",
+        "short": "Shift",
+        "symbol": "⇧",
+        "type": "modifier",
+        "mask": NSEventModifierFlagShift,
+    },
+    "fn": {
+        "title": "Double-tap Fn / Globe",
+        "short": "Fn",
+        "symbol": "🌐",
+        "type": "modifier",
+        "mask": NSEventModifierFlagFunction,
+    },
+    "control_option": {
+        "title": "Double-tap Control + Option",
+        "short": "Ctrl+Opt",
+        "symbol": "⌃⌥",
+        "type": "modifier",
+        "mask": NSEventModifierFlagControl | NSEventModifierFlagOption,
+    },
+    "f5": {
+        "title": "Press F5",
+        "short": "F5",
+        "symbol": "F5",
+        "type": "key",
+        "keyCode": 96,
+    },
+    "f6": {
+        "title": "Press F6",
+        "short": "F6",
+        "symbol": "F6",
+        "type": "key",
+        "keyCode": 97,
+    },
+}
+
+FUNCTION_KEYS = {
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118,
+    "f5": 96, "f6": 97, "f7": 98, "f8": 100,
+    "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
 
 
 class MenuBar(rumps.App):
@@ -45,6 +121,7 @@ class MenuBar(rumps.App):
         }
         self.engine_menu = rumps.MenuItem("Listen With")
         self.voice_out_menu = rumps.MenuItem("Speaking Voice")
+        self.voice_shortcut_menu = rumps.MenuItem("Voice Mode Shortcut")
         self.engines: dict = {}
         self.pending_engine = None  # chosen before the Voice Pack finished installing
         mode_menu = rumps.MenuItem("Mode")
@@ -75,6 +152,7 @@ class MenuBar(rumps.App):
             connect_menu.add(item)
         for item in (
             rumps.MenuItem("API Keys…", callback=self.edit_keys),
+            rumps.MenuItem("Voice Shortcut…", callback=lambda _: self.custom_voice_shortcut_dialog()),
             self.pack_item,
             None,
             self.login,
@@ -92,7 +170,7 @@ class MenuBar(rumps.App):
             settings_menu.add(item) if item is not None else settings_menu.add(rumps.separator)
 
         voice_menu = rumps.MenuItem("Voice")
-        for item in (self.engine_menu, self.voice_out_menu, None,
+        for item in (self.engine_menu, self.voice_out_menu, self.voice_shortcut_menu, None,
                      self.toggles["hands_free"], self.toggles["speak_replies"], self.toggles["narrate"]):
             voice_menu.add(item) if item is not None else voice_menu.add(rumps.separator)
         work_toggles = [v for k, v in self.toggles.items() if k not in ("hands_free", "speak_replies", "narrate")]
@@ -137,6 +215,7 @@ class MenuBar(rumps.App):
         has_pack = voicepack.installed()
         self.build_engine_menu(has_pack)
         self.build_voice_out_menu(has_pack)
+        self.build_voice_shortcut_menu()
         self.pack_item.title = "Remove Voice Pack" if voicepack.HELPER.exists() else "Install Voice Pack…"
         self.pack_item.set_callback(None if (has_pack and not voicepack.HELPER.exists()) else self.toggle_pack)
         for key, item in self.toggles.items():
@@ -394,22 +473,88 @@ class MenuBar(rumps.App):
         save_settings(self.settings)
         self.refresh_usage()
 
+    def get_voice_shortcut_info(self, shortcut_key: str | None = None) -> dict:
+        key = shortcut_key or self.settings.get("voice_shortcut", "control")
+        if key in VOICE_SHORTCUTS:
+            return VOICE_SHORTCUTS[key]
+        if key.lower() in FUNCTION_KEYS:
+            code = FUNCTION_KEYS[key.lower()]
+            return {
+                "title": f"Press {key.upper()}",
+                "short": key.upper(),
+                "symbol": key.upper(),
+                "type": "key",
+                "keyCode": code,
+            }
+        return VOICE_SHORTCUTS["control"]
+
+    def build_voice_shortcut_menu(self):
+        if self.voice_shortcut_menu._menu is not None and len(self.voice_shortcut_menu):
+            self.voice_shortcut_menu.clear()
+        current = self.settings.get("voice_shortcut", "control")
+        for key, info in VOICE_SHORTCUTS.items():
+            item = rumps.MenuItem(info["title"], callback=lambda _, k=key: self.set_voice_shortcut(k))
+            item.state = (current == key)
+            self.voice_shortcut_menu.add(item)
+        self.voice_shortcut_menu.add(rumps.separator)
+        self.voice_shortcut_menu.add(rumps.MenuItem("Custom Shortcut…", callback=lambda _: self.custom_voice_shortcut_dialog()))
+
+    def set_voice_shortcut(self, key: str):
+        self.settings["voice_shortcut"] = key
+        save_settings(self.settings)
+        self.build_voice_shortcut_menu()
+        if hasattr(self, "prompt_bar") and self.prompt_bar:
+            self.prompt_bar.update_voice_shortcut_hint()
+
+    def custom_voice_shortcut_dialog(self):
+        current = self.settings.get("voice_shortcut", "control")
+        val = self._prompt(
+            "Voice Mode Shortcut",
+            "Choose a shortcut for Interactive Voice Mode.\n\n"
+            "Modifier double-tap presets: control, option, command, shift, fn, control_option\n"
+            "Function keys: f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12",
+            default=current,
+        )
+        if not val:
+            return
+        clean = val.strip().lower().replace(" ", "_").replace("+", "_")
+        aliases = {
+            "ctrl": "control",
+            "cmd": "command",
+            "opt": "option",
+            "ctrl_opt": "control_option",
+            "control_opt": "control_option",
+            "ctrl_option": "control_option",
+            "globe": "fn",
+        }
+        chosen = aliases.get(clean, clean)
+        if chosen in VOICE_SHORTCUTS or chosen in FUNCTION_KEYS:
+            self.set_voice_shortcut(chosen)
+            info = self.get_voice_shortcut_info(chosen)
+            rumps.alert("Voice Shortcut Updated", f"Voice mode shortcut is now: {info['title']}")
+        else:
+            rumps.alert("Unknown Shortcut", f"'{val}' is not a recognized key or modifier.\nSupported: control, option, command, shift, fn, control_option, or f1-f12.")
+
     def _install_hotkey(self):
-        mods = NSEventModifierFlagControl | NSEventModifierFlagOption
-        NSEventMaskFlagsChanged = 1 << 12
+        if hasattr(self, "_monitors") and self._monitors:
+            for m in self._monitors:
+                try:
+                    NSEvent.removeMonitor_(m)
+                except Exception:
+                    pass
+            self._monitors = []
 
-        def hit(event):
-            return event.keyCode() == SPACE_KEY and (event.modifierFlags() & mods) == mods
+        talk_mods = NSEventModifierFlagControl | NSEventModifierFlagOption
+        MODIFIER_MASK = (
+            NSEventModifierFlagControl
+            | NSEventModifierFlagOption
+            | NSEventModifierFlagCommand
+            | NSEventModifierFlagShift
+            | NSEventModifierFlagFunction
+        )
 
-        def on_global(event):  # other apps are in front (needs Accessibility)
-            if hit(event):
-                self.events.put(("talk", None))
-
-        def on_local(event):
-            if hit(event):
-                self.events.put(("talk", None))
-                return None
-            return event
+        def hit_talk(event):
+            return event.keyCode() == SPACE_KEY and (event.modifierFlags() & talk_mods) == talk_mods
 
         tap_state = {
             "down": False,
@@ -419,12 +564,38 @@ class MenuBar(rumps.App):
             "hold_timer": None,
         }
 
+        def on_key_down(event):
+            if hit_talk(event):
+                self.events.put(("talk", None))
+                return None
+
+            info = self.get_voice_shortcut_info()
+            if info.get("type") == "key" and event.keyCode() == info.get("keyCode"):
+                self.events.put(("voice_toggle", None))
+                return None
+
+            # Normal key press cancels pending modifier tap sequence so shortcuts like Ctrl+C work safely
+            if tap_state["phase"] > 0:
+                tap_state["phase"] = 0
+                tap_state["down"] = False
+                if tap_state["hold_timer"]:
+                    tap_state["hold_timer"].cancel()
+                    tap_state["hold_timer"] = None
+
+            return event
+
         def on_flags_changed(event):
+            info = self.get_voice_shortcut_info()
+            if info.get("type") != "modifier":
+                return
+
             flags = event.modifierFlags()
-            both_down = (flags & mods) == mods
+            active_mods = flags & MODIFIER_MASK
+            target_mask = info.get("mask", NSEventModifierFlagControl)
+            is_target_down = (active_mods == target_mask)
             now = time.monotonic()
 
-            if both_down and not tap_state["down"]:
+            if is_target_down and not tap_state["down"]:
                 tap_state["down"] = True
                 if tap_state["phase"] == 1 and (now - tap_state["last_release"]) <= 0.40:
                     tap_state["phase"] = 2
@@ -440,7 +611,7 @@ class MenuBar(rumps.App):
                     t.start()
                 else:
                     tap_state["phase"] = 1
-            elif not both_down and tap_state["down"]:
+            elif not is_target_down and tap_state["down"]:
                 tap_state["down"] = False
                 if tap_state["hold_timer"]:
                     tap_state["hold_timer"].cancel()
@@ -461,6 +632,12 @@ class MenuBar(rumps.App):
                             tap_state["phase"] = 0
 
                     threading.Timer(0.40, reset_phase).start()
+
+        def on_global(event):
+            on_key_down(event)
+
+        def on_local(event):
+            return on_key_down(event)
 
         def on_global_flags(event):
             on_flags_changed(event)
@@ -611,7 +788,7 @@ class MenuBar(rumps.App):
             self.say("Voice mode off.")
 
     def start_voice_hold(self):
-        """Double-tap and hold: listen as long as holding Control+Option."""
+        """Double-tap and hold: listen as long as holding the voice shortcut key."""
         if not hasattr(self, "prompt_bar") or self.prompt_bar is None:
             from .prompt_bar import PromptBar
             self.prompt_bar = PromptBar(self)
@@ -619,7 +796,8 @@ class MenuBar(rumps.App):
         self.prompt_bar.set_hold_listening_state(True)
         self.direct = True
         self.ensure_voice(self._listen)
-        self.status.title = "🎙 Listening (holding Ctrl+Opt)…"
+        info = self.get_voice_shortcut_info()
+        self.status.title = f"🎙 Listening (holding {info['short']})…"
 
     def end_voice_hold(self):
         """Release double-tap and hold: end utterance immediately."""

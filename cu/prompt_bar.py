@@ -312,14 +312,32 @@ class PromptBar:
             self.input_field.setStringValue_("")
             self.input_field.setPlaceholderString_("Ask Computer Use or type a task... (Esc to dismiss)")
 
+    def _shortcut_hint(self) -> str:
+        if self.menubar and hasattr(self.menubar, "get_voice_shortcut_info"):
+            info = self.menubar.get_voice_shortcut_info()
+            if info.get("type") == "modifier":
+                return f"Double-tap {info['symbol']}"
+            return f"Press {info['symbol']}"
+        return "Double-tap ⌃"
+
+    def _shortcut_holding_hint(self) -> str:
+        if self.menubar and hasattr(self.menubar, "get_voice_shortcut_info"):
+            info = self.menubar.get_voice_shortcut_info()
+            return f"holding {info['short']}"
+        return "holding Control"
+
     def set_hold_listening_state(self, holding: bool):
         if holding:
             self.voice_btn.setTitle_("🔴")
             self.input_field.setStringValue_("")
-            self.input_field.setPlaceholderString_("🎙 Listening (holding Control+Option)…")
+            self.input_field.setPlaceholderString_(f"🎙 Listening ({self._shortcut_holding_hint()})…")
         else:
             self.voice_btn.setTitle_("🎙")
             self.input_field.setPlaceholderString_("Processing utterance…")
+
+    def update_voice_shortcut_hint(self):
+        if self.is_voice_mode and self.panel and self.panel.isVisible():
+            self.input_field.setPlaceholderString_(f"🎙 Listening… ({self._shortcut_hint()} to exit voice mode)")
 
     def update_speech_transcript(self, text: str, is_final: bool = False):
         """Update live speech transcription in the prompt bar."""
@@ -335,7 +353,7 @@ class PromptBar:
                 def _reset_prompt():
                     if self.is_voice_mode and self.panel and self.panel.isVisible():
                         self.input_field.setStringValue_("")
-                        self.input_field.setPlaceholderString_("🎙 Listening… (Double-tap ⌃⌥ to exit voice mode)")
+                        self.input_field.setPlaceholderString_(f"🎙 Listening… ({self._shortcut_hint()} to exit voice mode)")
                 threading.Timer(1.5, _reset_prompt).start()
         else:
             self.input_field.setStringValue_(f"🎙 {text}")
@@ -378,13 +396,20 @@ class PromptBar:
         menu = NSMenu.alloc().init()
         menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Teach New Skill (⌘T)", "onTeachAction:", "t"))
         menu.addItem_(NSMenuItem.separatorItem())
-        menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Toggle Voice Mode (⌃⌥Space)", "toggleVoiceAction:", ""))
+        menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(f"Toggle Voice Mode ({self._shortcut_hint()} or ⌃⌥Space)", "toggleVoiceAction:", ""))
+        item_change = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Change Voice Shortcut…", "onChangeVoiceShortcutAction:", "")
+        item_change.setTarget_(self)
+        menu.addItem_(item_change)
         menu.addItem_(NSMenuItem.separatorItem())
         menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Clear Input (Esc)", "on_escape", ""))
 
         frame = sender.frame()
         loc = NSPoint(frame.origin.x, frame.origin.y + frame.size.height + 4)
         menu.popUpMenuPositioningItem_atLocation_inView_(None, loc, self.bg_view)
+
+    def onChangeVoiceShortcutAction_(self, sender):
+        if self.menubar and hasattr(self.menubar, "custom_voice_shortcut_dialog"):
+            self.menubar.custom_voice_shortcut_dialog()
 
     def onHistoryAction_(self, sender):
         menu = NSMenu.alloc().init()

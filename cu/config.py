@@ -25,6 +25,7 @@ DEFAULTS = {
     "auto_update": True,  # install new releases when idle
     "last_version": "",
     "hands_free": False,  # always listening for "Computer, …"
+    "voice_shortcut": "control",  # shortcut for interactive voice mode (default: double-tap Control)
     "speak_replies": True,
     "narrate": False,  # talk through each step while working
     "speaking_voice": "mac:",  # "mac:<name>" (empty = system voice), "kokoro:<id>", or "gemini:<name>" (see cu/say.py)
