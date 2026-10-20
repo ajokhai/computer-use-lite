@@ -90,11 +90,27 @@ def _label(el) -> str:
     return ""
 
 
+def is_on_screen(x: int, y: int) -> bool:
+    """Check if (x, y) is within any connected screen (supports multi-monitor)."""
+    from AppKit import NSScreen
+    screens = NSScreen.screens()
+    if not screens:
+        sw, sh = screen_size()
+        return 0 <= x < sw and 0 <= y < sh
+    primary_h = screens[0].frame().size.height
+    for s in screens:
+        f = s.frame()
+        ax_x = f.origin.x
+        ax_y = primary_h - (f.origin.y + f.size.height)
+        if ax_x <= x < ax_x + f.size.width and ax_y <= y < ax_y + f.size.height:
+            return True
+    return False
+
+
 def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Element]]:
     """Walk the frontmost app's AX tree and return on-screen actionable elements."""
     app_name, pid = frontmost_app()
     root = AXUIElementCreateApplication(pid)
-    sw, sh = screen_size()
     focused = _attr(root, "AXFocusedUIElement")
     out: list[Element] = []
     seen: set[tuple] = set()
@@ -110,7 +126,7 @@ def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Eleme
             label = _label(el)
             if pos and size and size.width > 2 and size.height > 2:
                 cx, cy = int(pos.x + size.width / 2), int(pos.y + size.height / 2)
-                on_screen = 0 <= cx < sw and 0 <= cy < sh
+                on_screen = is_on_screen(cx, cy)
                 key = (role, label, cx, cy)
                 # Static text and images are only useful when they say something.
                 useful = role not in ("AXStaticText", "AXImage") or label
@@ -124,7 +140,12 @@ def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Eleme
         for child in _attr(el, "AXChildren") or []:
             visit(child, depth + 1)
 
-    for window in _attr(root, "AXWindows") or []:
+    windows = list(_attr(root, "AXWindows") or [])
+    if not windows:
+        for w in (_attr(root, "AXMainWindow"), _attr(root, "AXFocusedWindow")):
+            if w and w not in windows:
+                windows.append(w)
+    for window in windows:
         visit(window, 0)
     menubar = _attr(root, "AXMenuBar")
     if menubar is not None:
