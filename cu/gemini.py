@@ -95,8 +95,13 @@ class Gemini:
 
     def _create(self, **kw):
         kw.setdefault("generation_config", {"thinking_level": "low"})
+        tried = set()
         while True:
             model = self.model
+            if model in tried:
+                s = usage.status(model)
+                raise usage.QuotaExhausted("gemini", s.get("blocked_until"), f"all Gemini models out of quota ({usage.pretty(model)})")
+            tried.add(model)
             try:
                 it = self.client.interactions.create(model=model, **kw)
                 break

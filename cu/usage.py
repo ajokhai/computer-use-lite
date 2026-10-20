@@ -95,7 +95,7 @@ def status(provider: str) -> dict:
         out["used"] = b["requests"]
         out["limit"] = limit.get("requests_per_day")
     over_limit = out["limit"] is not None and out["used"] >= out["limit"]
-    blocked_until = b.get("exhausted_until") if (b.get("exhausted_until") or 0) > now and (out["used"] or 0) > 0 else None
+    blocked_until = b.get("exhausted_until") if (b.get("exhausted_until") or 0) > now else None
     out["available"] = not over_limit and blocked_until is None
     out["blocked_until"] = b["window_end"] if over_limit else blocked_until
     return out
