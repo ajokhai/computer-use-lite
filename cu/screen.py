@@ -163,6 +163,18 @@ def _load_native_lib():
                 if hasattr(lib, "cu_capture_to_file"):
                     lib.cu_capture_to_file.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_char_p]
                     lib.cu_capture_to_file.restype = ctypes.c_bool
+                if hasattr(lib, "cu_memory_find_match"):
+                    lib.cu_memory_find_match.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+                    lib.cu_memory_find_match.restype = ctypes.c_char_p
+                if hasattr(lib, "cu_memory_save_pattern"):
+                    lib.cu_memory_save_pattern.argtypes = [ctypes.c_char_p]
+                    lib.cu_memory_save_pattern.restype = ctypes.c_bool
+                if hasattr(lib, "cu_memory_list_patterns"):
+                    lib.cu_memory_list_patterns.argtypes = []
+                    lib.cu_memory_list_patterns.restype = ctypes.c_char_p
+                if hasattr(lib, "cu_memory_free_string"):
+                    lib.cu_memory_free_string.argtypes = [ctypes.c_char_p]
+                    lib.cu_memory_free_string.restype = None
 
                 _NATIVE_LIB = lib
                 return _NATIVE_LIB

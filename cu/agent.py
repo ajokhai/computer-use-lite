@@ -20,6 +20,7 @@ from .config import load_settings
 from .gemini import Gemini
 from .jev import Jev, installed_apps, text_candidates
 from .screen import Element, ax_elements
+from .memory import get_memory_store, prompt_user_for_help
 
 GROUNDED = {"click", "double_click", "type", "scroll"}
 
@@ -244,6 +245,13 @@ class Agent:
             stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)
             if stuck or (self.gemini and d["op_p"] < 0.35):
                 if not self.gemini:
+                    # Prompt user for guidance and learn from demonstration!
+                    learned = prompt_user_for_help(task, app, f"Unsure how to proceed with '{desc}'", log_fn=self.log)
+                    if learned:
+                        history.append(f"ok: User guided step in {app}")
+                        recent.clear()
+                        misses = 0
+                        continue
                     return self._report("blocked: Jev is stuck (add GEMINI_API_KEY to let Gemini take over)")
                 self.stats["gemini_steps"] += 1
                 ok, msg = self.gemini.act(f"Task: {task}\nDone so far: {history[-8:]}\nDo the next step or two, then stop.",
