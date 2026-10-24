@@ -354,3 +354,31 @@ def test_only_unrequested_payments_and_deletions_need_asking():
     assert not risky("CLICK", "Buy Now", "", "buy the cheapest flight")
     assert risky("CLICK", "Delete", "", "tidy my inbox")
     assert not risky("CLICK", "Delete", "", "delete the spam emails")
+
+
+# --- context budgets ----------------------------------------------------------------------
+
+
+def test_context_budgets_differ_by_model_and_settings_override_them(monkeypatch):
+    assert base.context_budget("claude-opus-5-5") == 200_000
+    assert base.context_budget("gpt-6.1-sol") == 128_000
+    assert base.context_budget("local:llava") == 16_000
+    assert base.context_budget("something-new") == base.DEFAULT_BUDGET
+    monkeypatch.setattr(config, "load_settings", lambda: settings(context_budgets={"local:": 50_000}))
+    assert base.context_budget("local:llava") == 50_000
+
+
+def test_a_long_conversation_starts_fresh_with_a_summary(desk):
+    big = NS(input_tokens=190_000, output_tokens=5)  # 95% of Claude's budget
+    client = FakeAnthropic([
+        reply(use("left_click", 1, coordinate=[150, 200])),
+        NS(content=[use("type", 2, text="hi")], stop_reason="tool_use", usage=big),
+        reply(NS(type="text", text="Done after a fresh start."), stop="end_turn"),
+    ])
+    m = claude.Claude(["claude-opus-5-5"], log=lambda s: None, client=client)
+    ok, msg = m.act("save the note", confirm=lambda q: True, log=lambda s: None)
+    assert (ok, msg) == (True, "Done after a fresh start.")
+    fresh = client.requests[2]["messages"]
+    assert fresh is not client.requests[1]["messages"]  # a new conversation, not the old one carried on
+    text = fresh[0]["content"][0]["text"]
+    assert text.startswith("save the note") and "Fresh start" in text and "left_click" in text

@@ -79,6 +79,7 @@ class Gemini(VisionModel):
         for _ in range(max_turns):
             if stop is not None and stop.is_set():
                 return False, "stopped by user"
+            self.check_context()  # the last request's size: start fresh with a summary if it's too big
             calls = [s for s in (_get(it, "steps") or []) if _get(s, "type") == "function_call"]
             if not calls:
                 return True, it.output_text or "done"

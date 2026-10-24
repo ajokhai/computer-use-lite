@@ -6,6 +6,7 @@ import io
 import json
 import re
 import time
+from collections import deque
 from contextlib import contextmanager
 from typing import Callable
 
@@ -67,6 +68,31 @@ def is_risky_action(op: str, label: str = "", detail: str = "", task: str = "") 
     text, asked = f"{label} {detail}".lower(), task.lower()
     return any(re.search(rf"\b{re.escape(word)}\b", text) and not any(a in asked for a in asks)
                for word, asks in RISKY_WORDS.items())
+
+
+# A comfortable working size for one conversation, in input tokens, per model (by id prefix). These
+# sit well under each model's hard limit, because long runs full of screenshots get worse before they
+# hit it. Past CONTEXT_FILL of the budget the conversation starts over with a summary of what's done.
+# The "context_budgets" setting ({"<model id or prefix>": tokens}) overrides them.
+CONTEXT_BUDGETS = [("claude-", 200_000), ("gemini-", 200_000), ("gpt-", 128_000), ("openrouter:", 64_000),
+                   ("local:", 16_000)]
+DEFAULT_BUDGET = 64_000
+CONTEXT_FILL = 0.8
+MAX_FRESH_STARTS = 3
+
+
+def context_budget(model: str) -> int:
+    from ..config import load_settings
+    over = load_settings().get("context_budgets") or {}
+    for table in (sorted(over.items(), key=lambda kv: -len(kv[0])), CONTEXT_BUDGETS):
+        for prefix, tokens in table:
+            if model == prefix or model.startswith(prefix):
+                return int(tokens)
+    return DEFAULT_BUDGET
+
+
+class ContextFull(Exception):
+    """The conversation outgrew the model's budget; the caller starts a fresh one with a summary."""
 
 
 class ModelSwitched(Exception):
@@ -251,6 +277,7 @@ class VisionModel:
                 if mid_conversation:
                     raise ModelSwitched(nxt) from e
         self.calls += 1
+        self.last_input, self.last_model = tin, model
         self.input_tokens += tin
         self.output_tokens += tout
         usage.record(model, tin, tout)
@@ -272,16 +299,42 @@ class VisionModel:
         }
         return parse_json(self._json(PLAN_SYSTEM, json.dumps(context), screenshot_png()))
 
+    def check_context(self):
+        """Raise ContextFull once the last request used most of this model's context budget."""
+        used, model = getattr(self, "last_input", 0), getattr(self, "last_model", "")
+        if model and used > CONTEXT_FILL * context_budget(model):
+            raise ContextFull(f"{used} input tokens on {model}")
+
     def act(self, instruction: str, max_turns: int = 15, **kw) -> tuple[bool, str]:
-        """Vision computer-use loop. Returns (success, final message)."""
-        for _ in range(len(self.models)):
+        """Vision computer-use loop. Returns (success, final message). Starts a fresh conversation,
+        with a summary of what was done, when the current one gets too long for the model."""
+        trail: deque = deque(maxlen=25)  # recent actions, for the summary a fresh start begins from
+        log = kw.get("log") or print
+
+        def tap(line):
+            trail.append(str(line).strip())
+            log(line)
+        kw["log"] = tap
+        task, switches, fresh = instruction, 0, 0
+        while True:
             try:
                 return self._act(instruction, max_turns, **kw)
             except ModelSwitched:
+                switches += 1
+                if switches >= len(self.models):
+                    return False, "kept running out of quota"
                 instruction += CONTINUE_NOTE
+            except ContextFull as e:
+                fresh += 1
+                if fresh > MAX_FRESH_STARTS:
+                    return False, "the task needed more than the model's context allows"
+                tap(f"  context is getting long ({e}); starting a fresh conversation with a summary")
+                done = "\n".join(f"- {ln}" for ln in list(trail)[-20:] if "→" in ln) or "- (no actions logged)"
+                instruction = f"{task}\n(Fresh start: the earlier conversation got too long. Done so far:\n{done}" \
+                              f"{CONTINUE_NOTE.lstrip()})"
+                self.last_input = 0
             except Declined as d:
                 return False, f"user declined: {d}"
-        return False, "kept running out of quota"
 
     def _act(self, instruction: str, max_turns: int = 15, confirm: Callable[[str], bool] = lambda m: False,
              log: Callable[[str], None] = print, stop=None, narrate: Callable[[str], None] = lambda t: None,

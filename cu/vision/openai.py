@@ -70,6 +70,7 @@ class OpenAI(VisionModel):
         for _ in range(max_turns):
             if stop is not None and stop.is_set():
                 return False, "stopped by user"
+            self.check_context()  # the last request's size: start fresh with a summary if it's too big
             calls = [o for o in resp.output if o.type in ("computer_call", "function_call")]
             if not calls:
                 return True, resp.output_text or "done"

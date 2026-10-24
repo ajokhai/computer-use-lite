@@ -80,6 +80,8 @@ class Claude(VisionModel):
         for turn in range(max_turns):
             if stop is not None and stop.is_set():
                 return False, "stopped by user"
+            if turn:
+                self.check_context()  # the last request's size: start fresh with a summary if it's too big
             resp = self._create(mid_conversation=turn > 0, system=CU_SYSTEM, tools=TOOLS, messages=messages)
             if resp.stop_reason == "refusal":
                 return False, "the vision model declined this task"
