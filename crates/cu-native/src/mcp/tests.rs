@@ -22,6 +22,11 @@ struct Fake {
     walks: usize,
     /// Where the captured display sits in global points (a second display can be negative).
     shot_origin: (f64, f64),
+    /// Another app with windows behind the frontmost one, and whether it's being read.
+    other: Option<(String, Vec<NativeElement>)>,
+    reading_other: bool,
+    /// Indexes of elements whose window is covered by another window of the same app.
+    covered: Vec<usize>,
 }
 
 fn el(id: &str, role: &str, label: &str, x: i32, y: i32) -> NativeElement {
@@ -58,7 +63,38 @@ impl Desktop for Fake {
                 self.els = next.clone();
             }
         }
+        if let (true, Some((name, els))) = (self.reading_other, &self.other) {
+            return (name.clone(), els.iter().take(limit).cloned().collect());
+        }
         (self.app.clone(), self.els.iter().take(limit).cloned().collect())
+    }
+    fn set_target(&mut self, app: Option<&str>) -> Result<String, String> {
+        match app {
+            None => self.reading_other = false,
+            Some(a) if self.other.as_ref().is_some_and(|(n, _)| n.eq_ignore_ascii_case(a)) => self.reading_other = true,
+            Some(a) => return Err(format!("no app named {a:?} has a window on screen")),
+        }
+        Ok(if self.reading_other { self.other.as_ref().unwrap().0.clone() } else { self.app.clone() })
+    }
+    fn bring_forward(&mut self, index: usize) -> Result<Option<String>, String> {
+        if self.reading_other {
+            // The other app comes to the front; the old frontmost app goes behind it.
+            let (name, els) = self.other.take().unwrap();
+            self.other = Some((std::mem::replace(&mut self.app, name.clone()), std::mem::replace(&mut self.els, els)));
+            self.reading_other = false;
+            self.log.push(format!("raise {name}"));
+            return Ok(Some(format!("brought {name} forward")));
+        }
+        if let Some(pos) = self.covered.iter().position(|&i| i == index) {
+            self.covered.remove(pos);
+            self.log.push(format!("raise window of e{index}"));
+            return Ok(Some("brought the window \"Draft\" forward".into()));
+        }
+        Ok(None)
+    }
+    fn focus_window(&mut self, app: &str, title: Option<&str>) -> Result<String, String> {
+        self.log.push(format!("focus {app} {title:?}"));
+        Ok(format!("{app} is in front"))
     }
     fn read_element(&mut self, index: usize) -> Option<String> {
         self.texts.get(index).cloned()
@@ -467,4 +503,34 @@ fn escape_three_times_stops_acting_tools_for_a_while() {
     let (_, err, _) = call(&mut s, "click_at", json!({"x": 1, "y": 1}));
     assert!(!err, "the stop wears off");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_click_on_a_covered_window_brings_it_forward_first() {
+    let mut s = server();
+    s.desk.covered = vec![3];
+    call(&mut s, "list_screen_elements", json!({}));
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "e3"}));
+    assert!(!err && text.starts_with("brought the window \"Draft\" forward, clicked"), "{text}");
+    assert_eq!(s.desk.log, vec!["raise window of e3", "click 500,200 Left x1"], "raised before the click");
+    let (text, _, _) = call(&mut s, "click_element", json!({"element": "e0"}));
+    assert!(text.starts_with("clicked"), "an element already in front isn't raised: {text}");
+}
+
+#[test]
+fn another_apps_windows_can_be_read_and_used() {
+    let mut s = server();
+    s.desk.other = Some(("Notes".into(), vec![el("e0", "AXTextArea", "Shopping list", 900, 400), el("e1", "AXButton", "New Note", 800, 60)]));
+    let (text, err, _) = call(&mut s, "list_screen_elements", json!({"app": "notes"}));
+    assert!(!err && text.starts_with("app: Notes (2 elements; not in front"), "{text}");
+    assert!(s.desk.log.is_empty(), "reading doesn't bring it forward");
+    let (text, err, _) = call(&mut s, "type_text", json!({"text": "eggs", "element": "Shopping list"}));
+    assert!(!err && text.contains("into e0 TextArea") && text.contains("brought Notes forward"), "{text}");
+    assert_eq!(s.desk.log[..3], ["raise Notes", "click 900,400 Left x1", "type eggs"]);
+    let (text, _, _) = call(&mut s, "list_screen_elements", json!({}));
+    assert!(text.starts_with("frontmost app: Notes"), "{text}");
+    let (text, err, _) = call(&mut s, "list_screen_elements", json!({"app": "Pages"}));
+    assert!(err && text.contains("no app named"), "{text}");
+    let (text, err, _) = call(&mut s, "focus_window", json!({"app": "Mail", "title": "Inbox"}));
+    assert!(!err && text == "Mail is in front", "{text}");
 }

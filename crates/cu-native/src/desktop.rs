@@ -22,8 +22,16 @@ pub trait Desktop {
     fn main_display(&self) -> (f64, f64);
     /// Whether (x, y) in global points is on any display.
     fn on_screen(&self, x: f64, y: f64) -> bool;
-    /// The frontmost app and its actionable elements. Replaces the previous snapshot.
+    /// The app being read (the frontmost one unless [`Desktop::set_target`] chose another) and its
+    /// actionable elements. Replaces the previous snapshot.
     fn elements(&mut self, limit: usize) -> (String, Vec<NativeElement>);
+    /// Read this app's windows from now on, in front or not (None: the frontmost app). Returns its name.
+    fn set_target(&mut self, app: Option<&str>) -> Result<String, String>;
+    /// Before clicking or typing into element `index` of the latest snapshot: bring its window
+    /// forward if it's covered, minimized or in another app. Some(what was done) if it moved.
+    fn bring_forward(&mut self, index: usize) -> Result<Option<String>, String>;
+    /// Bring an app's window to the front, the one whose title contains `title` if given.
+    fn focus_window(&mut self, app: &str, title: Option<&str>) -> Result<String, String>;
     /// Full text of element `index` from the latest snapshot.
     fn read_element(&mut self, index: usize) -> Option<String>;
     fn screenshot(&mut self, max_width: u32) -> Result<Shot, String>;
@@ -54,6 +62,11 @@ pub trait Desktop {
 pub struct MacDesktop {
     /// Live references for the latest snapshot, index-aligned with its elements.
     refs: Vec<CfRef>,
+    /// Each element's window (None: the menu bar), and the snapshot's app.
+    windows: Vec<Option<CfRef>>,
+    pid: i32,
+    /// The app to read instead of the frontmost one.
+    target: Option<(i32, String)>,
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -74,9 +87,67 @@ impl Desktop for MacDesktop {
     }
 
     fn elements(&mut self, limit: usize) -> (String, Vec<NativeElement>) {
-        let snap = ax::walk(limit, true);
-        self.refs = snap.refs;
+        let snap = ax::walk_app(self.target.clone(), limit, true);
+        (self.refs, self.windows, self.pid) = (snap.refs, snap.windows, snap.pid);
         (snap.result.app, snap.result.elements)
+    }
+
+    fn set_target(&mut self, app: Option<&str>) -> Result<String, String> {
+        self.target = match app.map(str::trim).filter(|a| !a.is_empty()) {
+            None => None,
+            Some(name) => Some(ax::find_app(name).ok_or_else(|| {
+                format!("no app named {name:?} has a window on screen; open_app it, or see list_windows")
+            })?),
+        };
+        Ok(self.target.as_ref().map_or_else(|| ax::get_frontmost_app().1, |t| t.1.clone()))
+    }
+
+    fn bring_forward(&mut self, index: usize) -> Result<Option<String>, String> {
+        let window = self.windows.get(index).cloned().flatten();
+        if !ax::needs_raise(self.pid, window.as_ref()) {
+            return Ok(None);
+        }
+        if !ax::raise(self.pid, window.as_ref()) {
+            return Err("couldn't bring that element's window to the front; try focus_window or open_app".into());
+        }
+        let title = window.as_ref().and_then(|w| ax::app_windows(self.pid).into_iter().find(|(x, _)| ax::same(x, w)).map(|(_, t)| t));
+        Ok(Some(match title.filter(|t| !t.is_empty()) {
+            Some(t) => format!("brought the window {t:?} forward"),
+            None => "brought its app forward".to_string(),
+        }))
+    }
+
+    fn focus_window(&mut self, app: &str, title: Option<&str>) -> Result<String, String> {
+        let (pid, name) = match ax::find_app(app) {
+            Some(found) => found,
+            None => {
+                // Hidden, minimized or not running: let macOS bring it up, then find it.
+                self.open_app(app)?;
+                let front = ax::get_frontmost_app();
+                if !front.1.to_lowercase().contains(&app.trim().to_lowercase()) {
+                    return Err(format!("no window of {app:?} to bring forward"));
+                }
+                front
+            }
+        };
+        let wins = ax::app_windows(pid);
+        let want = title.map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty());
+        let pick = match &want {
+            Some(t) => wins.iter().find(|(_, wt)| wt.to_lowercase().contains(t)),
+            None => wins.first(),
+        };
+        if want.is_some() && pick.is_none() {
+            let titles: Vec<&str> = wins.iter().map(|(_, t)| t.as_str()).collect();
+            return Err(format!("{name} has no window titled like {:?}; its windows: {titles:?}", title.unwrap_or("")));
+        }
+        if !ax::raise(pid, pick.map(|(w, _)| w)) {
+            return Err(format!("couldn't bring {name} to the front"));
+        }
+        self.target = None;
+        Ok(match pick {
+            Some((_, t)) if !t.is_empty() => format!("{name}: window {t:?} is in front"),
+            _ => format!("{name} is in front"),
+        })
     }
 
     fn read_element(&mut self, index: usize) -> Option<String> {

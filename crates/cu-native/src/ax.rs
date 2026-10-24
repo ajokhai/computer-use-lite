@@ -25,6 +25,7 @@ unsafe extern "C" {
     fn AXUIElementPerformAction(element: CFTypeRef, action: CFTypeRef) -> AXError;
     fn AXUIElementSetAttributeValue(element: CFTypeRef, attribute: CFTypeRef, value: CFTypeRef) -> AXError;
     static kCFBooleanTrue: CFTypeRef;
+    static kCFBooleanFalse: CFTypeRef;
     fn AXValueGetValue(value: CFTypeRef, the_type: u32, value_ptr: *mut c_void) -> bool;
     fn AXIsProcessTrusted() -> bool;
 
@@ -234,11 +235,14 @@ fn enable_app_accessibility(pid: i32, app: &str, root: &CfRef) {
     }
 }
 
-/// The result of a walk, plus (optionally) a live reference to each element, index-aligned
-/// with `result.elements`, so later calls can read or press them.
+/// The result of a walk, plus (optionally) a live reference to each element and to the window
+/// it's in (None for the menu bar), index-aligned with `result.elements`, so later calls can
+/// read or press them and bring their window forward first.
 pub struct Snapshot {
     pub result: AxTreeResult,
     pub refs: Vec<CfRef>,
+    pub windows: Vec<Option<CfRef>>,
+    pub pid: i32,
 }
 
 fn label_of(el: &CfRef, keys: &[CfRef]) -> String {
@@ -269,20 +273,27 @@ fn geometry(el: &CfRef, k_pos: &CfRef, k_size: &CfRef) -> Option<(CGPoint, CGSiz
 /// elements (at most `max_elements`, within 2.5 s). A Chromium browser that shows no page yet
 /// has just been asked to build it, so look once more after a moment.
 pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
-    let (snap, saw_page) = walk_once(max_elements, keep_refs);
+    walk_app(None, max_elements, keep_refs)
+}
+
+/// Like [`walk`], for any running app (pid, name), in front or not. Reading doesn't bring it forward.
+pub fn walk_app(target: Option<(i32, String)>, max_elements: usize, keep_refs: bool) -> Snapshot {
+    let (snap, saw_page) = walk_once(target.clone(), max_elements, keep_refs);
     if saw_page || !CHROMIUM.contains(&snap.result.app.as_str()) || snap.result.elements.len() >= max_elements {
         return snap;
     }
     std::thread::sleep(std::time::Duration::from_millis(500));
-    walk_once(max_elements, keep_refs).0
+    walk_once(target, max_elements, keep_refs).0
 }
 
-fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
+fn walk_once(target: Option<(i32, String)>, max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
     let t0 = Instant::now();
-    let (pid, app) = get_frontmost_app();
+    let (pid, app) = target.unwrap_or_else(get_frontmost_app);
     let empty = |app: String| Snapshot {
         result: AxTreeResult { app, duration_ms: t0.elapsed().as_secs_f64() * 1000.0, elements: Vec::new() },
         refs: Vec::new(),
+        windows: Vec::new(),
+        pid,
     };
     if pid <= 0 {
         return (empty(app), false);
@@ -315,18 +326,21 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
             }
         }
     }
+    // Each element's window, by index into `roots`; the menu bar has none.
+    let win_roots: Vec<Option<CfRef>> = roots.iter().map(|r| Some(r.clone())).chain([None]).collect();
     roots.extend(copy_attr(&root, &cf_string("AXMenuBar")));
 
     let mut elements = Vec::with_capacity(max_elements.min(512));
     let mut refs = Vec::new();
+    let mut windows = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    // (element, depth, already deferred once)
-    let mut stack: Vec<(CfRef, usize, bool)> = roots.into_iter().rev().map(|r| (r, 0, false)).collect();
-    let mut later: Vec<(CfRef, usize, bool)> = Vec::new();
+    // (element, depth, already deferred once, index of its root)
+    let mut stack: Vec<(CfRef, usize, bool, usize)> = roots.into_iter().enumerate().rev().map(|(i, r)| (r, 0, false, i)).collect();
+    let mut later: Vec<(CfRef, usize, bool, usize)> = Vec::new();
     let mut extra_inputs = 0usize;
 
     loop {
-        let Some((el, depth, deferred)) = stack.pop() else {
+        let Some((el, depth, deferred, win)) = stack.pop() else {
             if later.is_empty() {
                 break;
             }
@@ -347,7 +361,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
                 && copy_attr(&el, &k_subrole).is_some_and(|r| DEFERRED_SUBROLES.contains(&string_of(r.ptr()).as_str()))
         };
         if !deferred && (DEFERRED.contains(&role.as_str()) || landmark()) {
-            later.push((el, depth, true));
+            later.push((el, depth, true, win));
             continue;
         }
 
@@ -379,6 +393,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
                     });
                     if keep_refs {
                         refs.push(el.clone());
+                        windows.push(win_roots.get(win).cloned().flatten());
                     }
                     if full {
                         extra_inputs += 1;
@@ -392,7 +407,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
         if matches!(role.as_str(), "AXOutline" | "AXTable" | "AXList") {
             kids.truncate(12);
         }
-        stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1, deferred)));
+        stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1, deferred, win)));
     }
 
     // Make room for inputs found past the budget: drop plain text and images from the end first,
@@ -407,6 +422,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
                 elements.remove(i);
                 if keep_refs {
                     refs.remove(i);
+                    windows.remove(i);
                 }
             }
         }
@@ -418,8 +434,80 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
     let snap = Snapshot {
         result: AxTreeResult { app, duration_ms: t0.elapsed().as_secs_f64() * 1000.0, elements },
         refs,
+        windows,
+        pid,
     };
     (snap, saw_page)
+}
+
+/// A running app with a window on screen, by name: an exact match (ignoring case) first, then
+/// the first app whose name contains it. Front to back, so the nearer of two matches wins.
+pub fn find_app(name: &str) -> Option<(i32, String)> {
+    let want = name.trim().to_lowercase();
+    let wins = windows();
+    wins.iter()
+        .find(|w| w.app.to_lowercase() == want)
+        .or_else(|| wins.iter().find(|w| w.app.to_lowercase().contains(&want)))
+        .map(|w| (w.pid as i32, w.app.clone()))
+}
+
+/// Whether an element's window has to come forward before it can be clicked or typed into:
+/// its app isn't frontmost, or the window isn't the app's front window, or it's minimized.
+pub fn needs_raise(pid: i32, window: Option<&CfRef>) -> bool {
+    if get_frontmost_app().0 != pid {
+        return true;
+    }
+    let Some(window) = window else { return false };
+    if bool_attr(window, &cf_string("AXMinimized")) == Some(true) {
+        return true;
+    }
+    let Some(app) = CfRef::owned(unsafe { AXUIElementCreateApplication(pid) }) else { return false };
+    let front = copy_attr(&app, &cf_string("AXFocusedWindow")).or_else(|| copy_attr(&app, &cf_string("AXMainWindow")));
+    !front.is_some_and(|f| unsafe { CFEqual(f.ptr(), window.ptr()) })
+}
+
+/// Bring a window (or just its app) to the front: un-minimize, raise, activate, then wait
+/// (up to 1.5 s) for it to be frontmost. False if the app never came forward.
+pub fn raise(pid: i32, window: Option<&CfRef>) -> bool {
+    unsafe {
+        if let Some(w) = window {
+            AXUIElementSetAttributeValue(w.ptr(), cf_string("AXMinimized").ptr(), kCFBooleanFalse);
+            AXUIElementPerformAction(w.ptr(), cf_string("AXRaise").ptr());
+            AXUIElementSetAttributeValue(w.ptr(), cf_string("AXMain").ptr(), kCFBooleanTrue);
+        }
+        if let Some(app) = CfRef::owned(AXUIElementCreateApplication(pid)) {
+            AXUIElementSetAttributeValue(app.ptr(), cf_string("AXFrontmost").ptr(), kCFBooleanTrue);
+        }
+    }
+    let deadline = Instant::now() + std::time::Duration::from_millis(1500);
+    while get_frontmost_app().0 != pid {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200)); // let the window finish coming forward
+    true
+}
+
+/// Whether two references are the same accessibility element.
+pub fn same(a: &CfRef, b: &CfRef) -> bool {
+    unsafe { CFEqual(a.ptr(), b.ptr()) }
+}
+
+/// An app's windows (including minimized ones) with their titles, via Accessibility.
+pub fn app_windows(pid: i32) -> Vec<(CfRef, String)> {
+    let Some(app) = CfRef::owned(unsafe { AXUIElementCreateApplication(pid) }) else { return Vec::new() };
+    let Some(wins) = copy_attr(&app, &cf_string("AXWindows")) else { return Vec::new() };
+    let k_title = cf_string("AXTitle");
+    let n = unsafe { CFArrayGetCount(wins.ptr()) }.max(0);
+    (0..n)
+        .filter_map(|i| CfRef::retained(unsafe { CFArrayGetValueAtIndex(wins.ptr(), i) }))
+        .map(|w| {
+            let title = copy_attr(&w, &k_title).map(|t| string_of(t.ptr())).unwrap_or_default();
+            (w, title)
+        })
+        .collect()
 }
 
 /// Full text of an element: its value, else its title or description (capped at 20k chars).

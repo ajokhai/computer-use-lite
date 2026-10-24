@@ -25,13 +25,14 @@ Loop: look (list_screen_elements, and take_screenshot when the elements don't te
 Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over clicking. Prefer click_element (an id from list_screen_elements, or a description) over click_at.
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
 Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the user stopped you (the mouse in a screen corner, or Escape pressed 3 times), stop and ask.
+Windows behind others still work: list_screen_elements with app reads any app's windows without bringing them forward; clicking or typing into one of its elements brings that window forward first. focus_window brings a window (even a minimized one) to the front.
 Use speak() for short spoken updates when the user may be listening rather than watching.
 Call recall at the start of a task, and skills before a multi-step one. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember (and save_skill for a reusable multi-step way).";
 
 /// Tools that change something on screen; all refused while the emergency stop is active.
 const ACTING: &[&str] = &[
     "click_element", "click_at", "type_text", "press_keys", "scroll", "drag", "move_mouse",
-    "open_app", "open_url", "select_menu", "computer_task",
+    "open_app", "open_url", "select_menu", "computer_task", "focus_window",
 ];
 
 pub struct Server<D: Desktop> {
@@ -327,6 +328,12 @@ impl<D: Desktop> Server<D> {
         self.elements = els;
     }
 
+    /// Bring element `i`'s window forward if it's covered or in another app, so a click lands on it.
+    /// "brought … forward, " to put before the reply, or "" if it was already in front.
+    fn forward(&mut self, i: usize) -> Result<String, String> {
+        Ok(self.desk.bring_forward(i)?.map(|m| format!("{m}, ")).unwrap_or_default())
+    }
+
     /// Find an element by id from the latest list, or by description on a fresh list.
     fn resolve(&mut self, element: &str) -> Result<(usize, String), String> {
         let element = element.trim();
@@ -370,8 +377,9 @@ impl<D: Desktop> Server<D> {
         json!([
             {"name": "take_screenshot", "description": "Screenshot of the display showing the frontmost app's window (it follows the app across displays). Every x/y in these tools is a pixel of the latest screenshot.",
              "inputSchema": s(json!({"max_width": {"type": "integer", "description": "Widest image to return, default 1280 (smaller is cheaper)."}}), &[])},
-            {"name": "list_screen_elements", "description": "The frontmost app's buttons, fields, links, menus and text, from the accessibility tree, as lines of: id role \"label\" at (x,y).",
-             "inputSchema": s(json!({"limit": {"type": "integer", "description": "At most this many elements (default 300, max 600)."}}), &[])},
+            {"name": "list_screen_elements", "description": "An app's buttons, fields, links, menus and text in all its windows, from the accessibility tree, as lines of: id role \"label\" at (x,y). The frontmost app unless app names another; reading doesn't bring it forward, and clicking or typing into one of its elements does.",
+             "inputSchema": s(json!({"limit": {"type": "integer", "description": "At most this many elements (default 300, max 600)."},
+                                     "app": {"type": "string", "description": "Read this app instead of the frontmost one, e.g. \"Notes\" (see list_windows)."}}), &[])},
             {"name": "click_element", "description": "Click an element by id or description.",
              "inputSchema": s(json!({"element": element, "double": {"type": "boolean"}, "button": {"type": "string", "enum": ["left", "right", "middle"]}}), &["element"])},
             {"name": "click_at", "description": "Click at screenshot pixel coordinates. Use when an app has no useful elements.",
@@ -396,6 +404,9 @@ impl<D: Desktop> Server<D> {
              "inputSchema": s(json!({"element": element}), &["element"])},
             {"name": "list_windows", "description": "Every on-screen window across all apps, front to back, with its app, title and bounds.",
              "inputSchema": s(json!({}), &[])},
+            {"name": "focus_window", "description": "Bring an app's window to the front (un-minimizing it if needed): the one whose title contains title, else its main window.",
+             "inputSchema": s(json!({"app": {"type": "string", "description": "App name, e.g. \"Notes\"."},
+                                     "title": {"type": "string", "description": "Part of the window's title."}}), &["app"])},
             {"name": "wait_for_change", "description": "Wait until the frontmost app's elements change (a page loads, a dialog opens), up to a timeout.",
              "inputSchema": s(json!({"timeout_seconds": {"type": "number", "description": "Default 5, max 30."}}), &[])},
             {"name": "speak", "description": "Say a short sentence out loud to the user in their chosen voice.",
@@ -452,8 +463,17 @@ impl<D: Desktop> Server<D> {
             }
             "list_screen_elements" => {
                 let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(300) as usize;
+                let target = arg_str(args, "app");
+                if let Err(e) = self.desk.set_target(target) {
+                    return Ok(Reply::error(e));
+                }
                 self.refresh(limit);
-                let mut out = format!("frontmost app: {} ({} elements)\n", self.app, self.elements.len());
+                let front = self.desk.frontmost();
+                let mut out = if front == self.app {
+                    format!("frontmost app: {} ({} elements)\n", self.app, self.elements.len())
+                } else {
+                    format!("app: {} ({} elements; not in front, so clicking or typing into one brings its window forward)\n", self.app, self.elements.len())
+                };
                 for i in 0..self.elements.len() {
                     out.push_str(&self.describe(i));
                     out.push('\n');
@@ -465,9 +485,10 @@ impl<D: Desktop> Server<D> {
             }
             "click_element" => {
                 let (i, how) = self.resolve(req_str(args, "element")?)?;
+                let moved = self.forward(i)?;
                 let e = self.elements[i].clone();
                 self.desk.click(e.x as f64, e.y as f64, button(args)?, if arg_bool(args, "double") { 2 } else { 1 });
-                Ok(Reply::text(format!("clicked {} ({how})", self.describe(i))))
+                Ok(Reply::text(format!("{moved}clicked {} ({how})", self.describe(i))))
             }
             "click_at" => {
                 let (x, y) = self.to_points(arg_f64(args, "x")?, arg_f64(args, "y")?);
@@ -485,10 +506,11 @@ impl<D: Desktop> Server<D> {
                 let mut target = String::new();
                 if let Some(el) = arg_str(args, "element") {
                     let (i, _) = self.resolve(el)?;
+                    let moved = self.forward(i)?;
                     let e = self.elements[i].clone();
                     self.desk.click(e.x as f64, e.y as f64, Button::Left, 1);
                     self.desk.sleep(Duration::from_millis(150));
-                    target = format!(" into {}", self.describe(i));
+                    target = format!(" into {}{}", self.describe(i), if moved.is_empty() { String::new() } else { format!(" ({})", moved.trim_end_matches(", ")) });
                 }
                 if arg_bool(args, "clear_first") {
                     self.desk.hotkey(&["command", "a"]);
@@ -525,6 +547,7 @@ impl<D: Desktop> Server<D> {
                 let (x, y) = match arg_str(args, "element") {
                     Some(el) => {
                         let (i, _) = self.resolve(el)?;
+                        self.forward(i)?;
                         (self.elements[i].x as f64, self.elements[i].y as f64)
                     }
                     None => {
@@ -588,6 +611,10 @@ impl<D: Desktop> Server<D> {
                 }
                 Ok(Reply::text(out))
             }
+            "focus_window" => Ok(match self.desk.focus_window(req_str(args, "app")?, arg_str(args, "title")) {
+                Ok(msg) => Reply::text(msg),
+                Err(e) => Reply::error(e),
+            }),
             "wait_for_change" => {
                 let timeout = args.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(5.0).clamp(0.2, 30.0);
                 let sig = |s: &Self| {
