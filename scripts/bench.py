@@ -120,7 +120,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("models", nargs="+", choices=MODELS)
     p.add_argument("--task", default="tweet", choices=TASKS)
-    p.add_argument("--timeout", type=int, default=600, help="seconds before a run fails (each phase)")
+    p.add_argument("--timeout", type=int, default=600, help="seconds for a whole run, cleanup included, before it fails")
     p.add_argument("--no-cleanup", action="store_true",
                    help="skip a model's own cleanup and delete the test items by exact name instead (for models "
                         "that can't see which item they'd delete, on a Mac with real data)")
@@ -131,6 +131,7 @@ def main():
         task = TASKS[a.task].format(label=LABELS[m], stamp=stamp)
         before = running(APPS.get(a.task, ()))
         print(f"▶ {m} [stamp {stamp}]: {task}", flush=True)
+        deadline = time.monotonic() + a.timeout  # one budget for the task and its cleanup
         r = run(m, task, a.timeout) | {"stamp": stamp}
         print(f"  {r['seconds']}s, {r['actions']} actions, exit {r['exit']}: {r['result']}", flush=True)
         if a.task in CHECKERS:
@@ -140,7 +141,10 @@ def main():
         elif a.task in FOLLOW_UPS:
             follow = FOLLOW_UPS[a.task].format(label=LABELS[m], stamp=stamp)
             print(f"▶ {m} cleans up: {follow}", flush=True)
-            c = run(m, follow, a.timeout)
+            left = int(deadline - time.monotonic())
+            c = run(m, follow, left) if left > 5 else {
+                "seconds": 0, "actions": 0, "exit": -1, "void": False,
+                "result": f"stopped: TIMED OUT, no time left of the {a.timeout}s for cleanup (counts as a fail)"}
             print(f"  {c['seconds']}s, {c['actions']} actions, exit {c['exit']}: {c['result']}", flush=True)
             r["cleanup"] = {k: c[k] for k in ("seconds", "actions", "exit", "result", "void")} | {
                 "check": check(a.task, stamp, "--cleaned")}
