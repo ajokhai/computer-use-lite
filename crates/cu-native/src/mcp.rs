@@ -51,6 +51,9 @@ pub struct Server<D: Desktop> {
     log: Option<std::path::PathBuf>,
     /// The app writes the time here when the user presses Escape 3 times.
     stop_file: std::path::PathBuf,
+    /// The frontmost app when the last call finished: if it's different now, the user switched
+    /// apps, and element ids or descriptions would land in the wrong app.
+    front: Option<String>,
 }
 
 /// How long after Escape ×3 acting tools are refused.
@@ -189,8 +192,18 @@ pub fn match_score(desc: &str, el: &NativeElement) -> f64 {
     // An exact name beats any partial or nearby-text match: a quoted name ('Button "Post"'),
     // or the whole description (minus role words) being the label.
     let quoted = d.split(['"', '\u{201c}', '\u{201d}']).nth(1).map(str::trim).filter(|q| !q.is_empty());
+    // A quoted name has to be the label, or nearly: 'Button "All Clear"' is never "Full screen".
+    if let Some(q) = quoted {
+        if label.is_empty() || !(label.contains(q) || q.contains(label.as_str()) || similarity(q, &label) >= 0.75) {
+            return 0.0;
+        }
+    }
     if !label.is_empty() && (quoted == Some(label.as_str()) || label == core || label == d) {
         score += 1.0;
+    }
+    // The role only decides between names that already match; it can't make a weak name pass.
+    if score < 0.5 {
+        return score;
     }
     if ROLE_HINTS.iter().any(|(h, roles)| dw.iter().any(|w| w == h) && roles.contains(&el.role.as_str())) {
         score += 0.1;
@@ -240,7 +253,7 @@ impl<D: Desktop> Server<D> {
         let scale = if w > DEFAULT_SHOT_WIDTH as f64 { w / DEFAULT_SHOT_WIDTH as f64 } else { 1.0 };
         Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
                  lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()),
-                 stop_file: lessons::default_dir().join("stop-request"),
+                 stop_file: lessons::default_dir().join("stop-request"), front: None,
                  log: std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs/Computer Use/mcp.log")) }
     }
 
@@ -337,6 +350,12 @@ impl<D: Desktop> Server<D> {
     /// Find an element by id from the latest list, or by description on a fresh list.
     fn resolve(&mut self, element: &str) -> Result<(usize, String), String> {
         let element = element.trim();
+        let now = self.desk.frontmost();
+        if let Some(before) = self.front.as_ref().filter(|b| **b != now) {
+            return Err(format!(
+                "the front app changed from {before} to {now} since your last step (the user may have switched apps); call list_screen_elements or take_screenshot again before acting"
+            ));
+        }
         let is_id = element.len() > 1 && element.starts_with('e') && element[1..].chars().all(|c| c.is_ascii_digit());
         if is_id {
             if let Some(i) = self.elements.iter().position(|e| e.id == element) {
@@ -740,6 +759,7 @@ impl<D: Desktop> Server<D> {
                     Err(e) => format!("error: {}", truncate_chars(e, 120)),
                 };
                 self.log_call(name, &args, &outcome.replace('\n', " "), t0.elapsed().as_millis());
+                self.front = Some(self.desk.frontmost());
                 match reply {
                     Ok(r) => json!({"content": r.content, "isError": r.is_error}),
                     Err(e) if e.starts_with("unknown tool") => return Some(error(id, -32602, &e)),

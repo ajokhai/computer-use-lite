@@ -534,3 +534,24 @@ fn another_apps_windows_can_be_read_and_used() {
     let (text, err, _) = call(&mut s, "focus_window", json!({"app": "Mail", "title": "Inbox"}));
     assert!(!err && text == "Mail is in front", "{text}");
 }
+
+#[test]
+fn a_quoted_name_or_a_role_never_rescues_a_weak_match() {
+    let els = vec![el("e0", "AXButton", "Tags…", 10, 10), el("e1", "AXButton", "Full screen", 20, 20)];
+    assert!(best_match("Button \"7\"", &els).is_none());
+    assert!(best_match("Button \"All Clear\"", &els).is_none());
+    assert_eq!(best_match("Button \"Full Screen\"", &els).unwrap().0, 1);
+}
+
+#[test]
+fn acting_after_the_user_switches_apps_is_refused_until_looking_again() {
+    let mut s = server();
+    call(&mut s, "list_screen_elements", json!({}));
+    s.desk.app = "Antigravity IDE".into(); // the user clicked into another app
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "e0"}));
+    assert!(err && text.contains("front app changed from Mail to Antigravity IDE"), "{text}");
+    assert!(s.desk.log.is_empty(), "nothing was clicked");
+    call(&mut s, "list_screen_elements", json!({}));
+    let (_, err, _) = call(&mut s, "click_element", json!({"element": "e0"}));
+    assert!(!err, "fine once it has looked again");
+}
