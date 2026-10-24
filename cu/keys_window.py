@@ -9,29 +9,34 @@ import objc
 from AppKit import (
     NSAlert,
     NSApplication,
-    NSBox,
-    NSButton,
     NSColor,
     NSFont,
     NSImage,
     NSImageSymbolConfiguration,
-    NSImageView,
     NSMakeRect,
     NSPanel,
     NSSecureTextField,
     NSTextField,
     NSView,
     NSWindowStyleMaskClosable,
+    NSWindowStyleMaskFullSizeContentView,
     NSWindowStyleMaskTitled,
 )
 from Foundation import NSObject
 
+from . import ui
 from .config import DEFAULTS, load_keys, load_settings, save_settings, set_key
 
-WIDTH = 540.0
-ROW_H = 58.0
 PAD = 24.0
 FIELD_W = 340.0
+
+CARD_W, CARD_H = 262.0, 168.0
+WHERE = {"jev": "Key from your TypeSafe dashboard.", "claude": "Key from platform.claude.com.",
+         "openai": "Key from platform.openai.com.", "gemini": "Key from aistudio.google.com.",
+         "openrouter": "Key from openrouter.ai, then pick a model.", "local": "Ollama, LM Studio or any "
+         "OpenAI-compatible server. No key needed."}
+ROLES = {"jev": "Cheapest actions", "claude": "Vision model", "openai": "Vision model",
+         "gemini": "Vision model and voices", "openrouter": "Any model it offers", "local": "Runs on this Mac"}
 
 # (row id, title, what it's for, Keychain key, settings key for the model name)
 PROVIDERS = [
@@ -45,6 +50,7 @@ PROVIDERS = [
     ("local", "Local Model", "A model on this Mac (Ollama, LM Studio…). No key needed.", None,
      "local_model"),
 ]
+PROVIDERS_BY_ID = {p[0]: p for p in PROVIDERS}
 
 
 def _saved(key: str) -> bool:
@@ -72,11 +78,6 @@ def _label(text: str, size: float, color, weight: float = 0.0) -> NSTextField:
     f.setTextColor_(color)
     f.setSelectable_(False)
     return f
-
-
-def _symbol(name: str):
-    img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
-    return img.imageWithSymbolConfiguration_(NSImageSymbolConfiguration.configurationWithPointSize_weight_(18, 0.0))
 
 
 def _form(rows: list[tuple[str, NSTextField, str]]) -> NSView:
@@ -137,80 +138,104 @@ class KeysWindow(NSObject):
 
     @objc.python_method
     def _build(self):
-        height = 116 + ROW_H * len(PROVIDERS) + 74
+        rows = (len(PROVIDERS) + 1) // 2
+        grid_h = rows * CARD_H + (rows - 1) * ui.GAP
+        width = 2 * PAD + 2 * CARD_W + ui.GAP
+        height = 112 + grid_h + 76
         self.panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, WIDTH, height), NSWindowStyleMaskTitled | NSWindowStyleMaskClosable, 2, False)
+            NSMakeRect(0, 0, width, height), NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskFullSizeContentView, 2, False)
         self.panel.setTitle_("Models and Keys")
+        self.panel.setTitlebarAppearsTransparent_(True)
+        self.panel.setTitleVisibility_(1)  # hidden: the big title below says it
+        self.panel.setBackgroundColor_(ui.BACKGROUND)
         self.panel.setReleasedWhenClosed_(False)
         content = self.panel.contentView()
-        y = height - PAD
 
-        title = _label("Models and Keys", 20, NSColor.labelColor(), 0.3)
-        title.setFrame_(NSMakeRect(PAD, y - 26, WIDTH - 2 * PAD, 26))
-        content.addSubview_(title)
-        y -= 34
-        intro = _label("Add any one to run tasks from the bar. Keys are kept in your macOS Keychain. "
-                       "Choose which model works under Mode › Vision Model.", 13, NSColor.secondaryLabelColor())
-        intro.setFrame_(NSMakeRect(PAD, y - 36, WIDTH - 2 * PAD, 36))
-        content.addSubview_(intro)
-        y -= 50
+        ui.place(content, ui.label("Models and Keys", 24, weight=0.4), PAD, height - 72)
+        ui.place(content, ui.label("Add any one to run tasks from the bar. Keys stay in your macOS Keychain.",
+                                   13, NSColor.secondaryLabelColor()), PAD, height - 96)
+        self.grid = NSView.alloc().initWithFrame_(NSMakeRect(PAD, 76, 2 * CARD_W + ui.GAP, grid_h))
+        content.addSubview_(self.grid)
 
-        for i, (row, name, desc, _key, _model) in enumerate(PROVIDERS):
-            y -= ROW_H
-            if i:
-                sep = NSBox.alloc().initWithFrame_(NSMakeRect(PAD + 38, y + ROW_H, WIDTH - 2 * PAD - 38, 1))
-                sep.setBoxType_(2)  # separator
-                content.addSubview_(sep)
-            self.rows[row] = self._row(content, y, row, name, desc)
-
-        self.done = NSButton.buttonWithTitle_target_action_("Done", self, "doneClicked:")
+        self.done = ui.capsule_button("Done", self, "doneClicked:", primary=True)
         self.done.setKeyEquivalent_("\r")
-        self.github = NSButton.buttonWithTitle_target_action_("GitHub Token…", self, "githubClicked:")
+        ui.place(content, self.done, width - PAD - self.done.frame().size.width, 24,
+                 self.done.frame().size.width, self.done.frame().size.height)
+        self.github = ui.capsule_button("GitHub Token…", self, "githubClicked:")
         self.github.setToolTip_("Only needed for updates from a private repo when the gh command isn't signed in")
-        for b in (self.done, self.github):
-            b.sizeToFit()
-            content.addSubview_(b)
-        dw = max(self.done.frame().size.width, 96)
-        self.done.setFrame_(NSMakeRect(WIDTH - PAD - dw, 18, dw, 32))
-        self.github.setFrame_(NSMakeRect(PAD, 18, self.github.frame().size.width, 32))
+        ui.place(content, self.github, PAD, 24, self.github.frame().size.width, self.github.frame().size.height)
         self.refresh()
 
     @objc.python_method
-    def _row(self, content, y, row, name, desc):
-        icon = NSImageView.alloc().initWithFrame_(NSMakeRect(PAD, y + ROW_H / 2 - 12, 24, 24))
-        content.addSubview_(icon)
-        x = PAD + 38
-        head = _label(name, 13, NSColor.labelColor(), 0.3)
-        head.sizeToFit()
-        head.setFrame_(NSMakeRect(x, y + ROW_H - 24, head.frame().size.width, 18))
-        content.addSubview_(head)
-        state = _label("", 11, NSColor.secondaryLabelColor(), 0.23)
-        state.setFrame_(NSMakeRect(x + head.frame().size.width + 8, y + ROW_H - 23, 180, 16))
-        content.addSubview_(state)
-        button = NSButton.buttonWithTitle_target_action_("Change…", self, "editClicked:")
-        button.setIdentifier_(row)
-        button.sizeToFit()
-        bw = max(button.frame().size.width, 96)
-        button.setFrame_(NSMakeRect(WIDTH - PAD - bw, y + ROW_H / 2 - 16, bw, 32))
-        content.addSubview_(button)
-        detail = _label(desc, 11, NSColor.secondaryLabelColor())
-        detail.setFrame_(NSMakeRect(x, y + 4, WIDTH - x - PAD - bw - 12, 30))
-        content.addSubview_(detail)
-        return {"icon": icon, "state": state, "button": button}
+    def _in_use(self, s: dict) -> str | None:
+        """The vision provider tasks would use now: the chosen model's, or Auto's first ready one."""
+        from . import vision
+        choice = s.get("vision_model") or "auto"
+        if choice != "auto":
+            return vision.provider_of(choice)
+        return next((p for p, _ in vision.order(s) if vision.has_key(p)), None)
+
+    @objc.python_method
+    def _card(self, row: str, name: str, s: dict, in_use: bool) -> NSView:
+        from . import usage, vision
+        ok, words = status(row, s)
+        half = not ok and words != "Not set"
+        c = ui.card(NSMakeRect(0, 0, CARD_W, CARD_H), ui.INVERSE if in_use else ui.CARD)
+        if in_use:  # in dark mode every card is dark, so the one in use also gets a faint ring
+            c.setBorderWidth_(1.5)
+            c.setBorderColor_(ui.INVERSE_RING)
+        v = c.contentView()
+        ink = ui.INVERSE_TEXT if in_use else NSColor.labelColor()
+        soft = ui.INVERSE_SECONDARY if in_use else NSColor.secondaryLabelColor()
+        pad = 18.0
+
+        ui.place(v, ui.label(name, 15, ink, 0.4), pad, CARD_H - 36)
+        models = vision.models(row, s) if row != "jev" else []
+        sub = " · ".join(usage.pretty(m).removeprefix(f"{name} ").removeprefix("Local ").removeprefix("OpenRouter ")
+                         for m in models) if ok and models else ROLES[row]
+        ui.place(v, ui.label(sub, 12, soft), pad, CARD_H - 56, CARD_W - 2 * pad, 16)
+
+        tag, tint = (("In Use", NSColor.systemGreenColor()) if in_use else ("Ready", NSColor.systemGreenColor()) if ok
+                     else ("Needs Model", NSColor.systemOrangeColor()) if half else ("Not Set", NSColor.tertiaryLabelColor()))
+        p = ui.pill(tag, tint)
+        ui.place(v, p, CARD_W - pad - p.frame().size.width, CARD_H - 34, p.frame().size.width, p.frame().size.height)
+
+        if ok or half:
+            if row == "jev":
+                big, caption = f"${usage.status('jev')['used']:.2f}", "this month"
+            else:
+                big, caption = str(sum(usage.status(m)["requests"] for m in models)), "requests today"
+            limits = [usage.status(m) for m in (models or ["jev"])]
+            capped = [st for st in limits if st["limit"]]
+            if capped:  # how much of the tightest limit is used, across the card
+                worst = max(capped, key=lambda st: st["used"] / st["limit"])
+                v.addSubview_(ui.gradient_bar(NSMakeRect(pad, 88, CARD_W - 2 * pad, 5), worst["used"] / worst["limit"]))
+                left = worst["limit"] - worst["used"]
+                caption += f" · {'$' + format(left, '.2f') if row == 'jev' else int(left)} left"
+            ui.place(v, ui.label(big, 30, ink, 0.3, digits=True), pad, 40)
+            ui.place(v, ui.label(caption, 12, soft), pad, 24)
+        else:
+            ui.place(v, ui.label(WHERE[row], 12, soft, wrap=True), pad, 56, CARD_W - 2 * pad, 34)
+
+        title = "Change" if ok or half else ("Set Up" if row == "local" else "Add Key")
+        b = ui.capsule_button(title, self, "editClicked:", primary=not (ok or half), on_dark=in_use)
+        b.setIdentifier_(row)
+        ui.place(v, b, CARD_W - pad - b.frame().size.width, 18, b.frame().size.width, b.frame().size.height)
+        return c
 
     @objc.python_method
     def refresh(self):
         s = load_settings()
-        for row, *_ in PROVIDERS:
-            ok, words = status(row, s)
-            half = not ok and words != "Not set"  # a key but no model yet
-            r = self.rows[row]
-            r["icon"].setImage_(_symbol("checkmark.circle.fill" if ok else "exclamationmark.circle.fill" if half else "circle"))
-            r["icon"].setContentTintColor_(NSColor.systemGreenColor() if ok else
-                                           NSColor.systemOrangeColor() if half else NSColor.tertiaryLabelColor())
-            r["state"].setStringValue_(words)
-            r["state"].setTextColor_(NSColor.secondaryLabelColor() if ok else NSColor.tertiaryLabelColor())
-            r["button"].setTitle_("Change…" if words != "Not set" else ("Set Up…" if row == "local" else "Add…"))
+        in_use = self._in_use(s)
+        for sub in list(self.grid.subviews()):
+            sub.removeFromSuperview()
+        rows = (len(PROVIDERS) + 1) // 2
+        for i, (row, name, *_rest) in enumerate(PROVIDERS):
+            col, line = i % 2, i // 2
+            c = self._card(row, name, s, row == in_use)
+            c.setFrameOrigin_((col * (CARD_W + ui.GAP), (rows - 1 - line) * (CARD_H + ui.GAP)))
+            self.grid.addSubview_(c)
 
     @objc.python_method
     def _changed(self):

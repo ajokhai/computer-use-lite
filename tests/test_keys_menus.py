@@ -76,3 +76,23 @@ def test_usage_is_one_line_per_provider(keys, monkeypatch):
     assert labels(gemini)[:3] == ["Gemini 3.8 Flash: 2 requests today", "Gemini 3.5 Flash Lite: 2 requests today",
                                   "Gemini 3 Flash Preview: 2 requests today"]
     assert "Open Dashboard" in labels(gemini) and "Set Gemini 3.8 Flash Daily Limit…" in labels(gemini)
+
+
+def test_window_shows_a_card_per_provider_with_its_state(keys, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    s = keys(local_model="")
+    monkeypatch.setattr(keys_window, "load_settings", lambda: s)
+    w = keys_window.KeysWindow.create(None)
+    texts = []
+
+    def walk(view):
+        for sub in view.subviews():
+            if hasattr(sub, "stringValue") and sub.isKindOfClass_(__import__("AppKit").NSTextField):
+                texts.append(str(sub.stringValue()))
+            if hasattr(sub, "title") and sub.isKindOfClass_(__import__("AppKit").NSButton):
+                texts.append(str(sub.title()))
+            walk(sub)
+    walk(w.grid)
+    assert len(w.grid.subviews()) == len(keys_window.PROVIDERS)
+    assert "In Use" in texts and texts.count("Not Set") == 5  # Claude is the only one set up
+    assert texts.count("Add Key") == 4 and "Set Up" in texts and "Change" in texts
