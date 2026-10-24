@@ -2,7 +2,6 @@
 
 import queue
 from collections import deque
-import re
 import subprocess
 import threading
 import time
@@ -1100,7 +1099,6 @@ def _choose_zip():
         from pathlib import Path
         return Path(str(panel.URLs()[0].path()))
     return None
-
 
 
 def _short(s: str, n: int = 40) -> str:
