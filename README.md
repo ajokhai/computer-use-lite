@@ -134,6 +134,8 @@ Computer Use gets better at your apps the more it's used, whichever model does t
 ## Benchmarks
 Live runs on a real Mac (October 2026), checked by hand or by script, not by the model's own word. A run gets **10 minutes in total**, cleanup included, or it fails. Afterwards the benchmark deletes anything the run made, quits the apps it opened, and closes the windows it left, whatever the model did. Raw logs are in `bench-results.jsonl`; run them yourself with `scripts/bench.py` (it drives the real Mac).
 
+![Benchmark results: the tweet and desk tasks for Claude, Gemini and Jev](docs/images/benchmark-results.png)
+
 **Tweet:** in Chrome, post a tweet that names the model and links this repo. Checked on the live profile.
 
 | Model | How | Result |
@@ -158,6 +160,8 @@ Results from more models and more Macs make this better. To add yours:
 4. Open an issue or pull request with your results: the model, how it ran (API or MCP), your Mac and macOS version, and the scores. New tasks are welcome too.
 
 ### What the benchmarks taught us
+![What the benchmarks fixed: safer stops, user-input awareness, checked cleanup, covered windows, faster screenshots](docs/images/benchmark-fixes.png)
+
 Each run's surprises became a fix in the code or a lesson in memory, so the next run starts from them.
 
 - **First-launch "What's New" sheets** in Reminders and Calendar swallow whatever is typed. Lesson: click Continue first.
