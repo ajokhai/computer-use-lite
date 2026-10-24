@@ -1,6 +1,7 @@
 """Menu bar app: a status icon with tick-able options. No windows except small prompts."""
 
 import queue
+from collections import deque
 import re
 import subprocess
 import threading
@@ -39,6 +40,7 @@ class MenuBar(rumps.App):
         self.pending = None
         self.awaiting_confirm = False
         self.prompt_bar = None
+        self.last_task, self.last_log = "", deque(maxlen=80)  # for Skills › Teach › From the Last Task
 
         self.status = rumps.MenuItem("Idle")
         self.last = rumps.MenuItem("")
@@ -82,6 +84,7 @@ class MenuBar(rumps.App):
                            t["open_listening"], t["hands_free"], t["speak_replies"], t["narrate"], None, self.pack_item])
 
         self.usage_menu = rumps.MenuItem("Usage")
+        self.skills_menu = rumps.MenuItem("Skills")
         working_menu = rumps.MenuItem("While Working")
         _fill(working_menu, [t["confirm_all"], t["allow_risky"], None, t["awake"], t["auto_switch"]])
 
@@ -116,7 +119,7 @@ class MenuBar(rumps.App):
         self.menu = [
             self.setup_item, self.status, self.last, self.stop_item, None,
             self.ask, None,
-            mode_menu, voice_menu, self.usage_menu, None,
+            mode_menu, voice_menu, self.usage_menu, self.skills_menu, None,
             working_menu, connect_menu, settings_menu, None,
             rumps.MenuItem("Quit Computer Use", callback=self.quit, key="q"),
         ]
@@ -156,6 +159,7 @@ class MenuBar(rumps.App):
         self.build_engine_menu(has_pack)
         self.build_voice_out_menu(has_pack)
         self.build_shortcut_menu()
+        self.build_skills_menu()
         self.build_vision_menu()
         self.pack_item.title = "Remove Voice Pack…" if voicepack.HELPER.exists() else "Install Voice Pack…"
         self.pack_item.set_callback(None if (has_pack and not voicepack.HELPER.exists()) else self.toggle_pack)
@@ -416,6 +420,155 @@ class MenuBar(rumps.App):
         self.settings["vision_model"] = model
         save_settings(self.settings)
         self.refresh()
+
+    # --- skills ----------------------------------------------------------------
+
+    def build_skills_menu(self):
+        """Skills grouped by app or site, then ways to teach, import and export them."""
+        from . import skills
+        if self.skills_menu._menu is not None and len(self.skills_menu):
+            self.skills_menu.clear()
+        groups = skills.categories()
+        for place in sorted(groups):
+            self.skills_menu.add(rumps.MenuItem(place, callback=None))
+            for sk in groups[place]:
+                wins = sk.get("wins", 0)
+                title = f"    {sk['name']}" + (f"  ·  {wins} win{'s' if wins != 1 else ''}" if wins else "")
+                self.skills_menu.add(rumps.MenuItem(title, callback=lambda _, sk=sk: self.show_skill(sk)))
+        if not groups:
+            self.skills_menu.add(rumps.MenuItem("No Skills Yet", callback=None))
+        teach = rumps.MenuItem("Teach a Skill")
+        _fill(teach, [
+            rumps.MenuItem("From the Last Task…", callback=lambda _: self.teach_from_last() if self.last_task else None),
+            rumps.MenuItem("Write It Myself…", callback=lambda _: self.teach_by_writing()),
+            rumps.MenuItem("From a Screen Recording…", callback=lambda _: self.teach_from_video()),
+        ])
+        teach["From the Last Task…"].set_callback((lambda _: self.teach_from_last()) if self.last_task else None)
+        _fill(self.skills_menu, [None, teach,
+                                 rumps.MenuItem("Import Skills…", callback=lambda _: self.import_file("skills")),
+                                 rumps.MenuItem("Export Skills…", callback=lambda _: self.export_file("skills")),
+                                 None,
+                                 rumps.MenuItem("Import Lessons…", callback=lambda _: self.import_file("lessons")),
+                                 rumps.MenuItem("Export Lessons…", callback=lambda _: self.export_file("lessons"))])
+
+    def show_skill(self, sk: dict):
+        from . import skills
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        choice = rumps.alert(sk["name"], skills.as_text(sk), ok="Close", cancel="Delete", other="Export…")
+        if choice == 0 and rumps.alert("Delete this skill?", sk["name"], ok="Delete", cancel="Keep") == 1:
+            skills.delete(sk["id"])
+            self.build_skills_menu()
+        elif choice == -1:
+            self.export_file("skills", ids=[sk["id"]], name=f"{sk['name']}.json")
+
+    def _vision(self):
+        """The vision model for distilling skills, or None if no model is set up."""
+        from . import vision
+        return vision.Vision(log=self.log) if vision.configured() else None
+
+    def _learn_in_background(self, make):
+        """Run a skill maker off the main thread; its result (or error) comes back as an alert."""
+        def run():
+            try:
+                sk = make()
+                self.events.put(("skill", f"Saved “{sk['name']}”.\n\n" + __import__("cu.skills").skills.as_text(sk)))
+            except Exception as e:
+                self.events.put(("skill", f"Couldn't make a skill: {e}"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def teach_from_last(self):
+        from . import skills
+        name = self._prompt("Teach a Skill", f"Keep how this was done as a skill:\n“{_short(self.last_task, 80)}”\n\nName it:")
+        if name is None:
+            return
+        v, task, log = self._vision(), self.last_task, list(self.last_log)
+        self.status.title = "Making a skill…"
+        self._learn_in_background(lambda: skills.from_run(task, log, v.ask_json if v else (lambda s, t: None), name))
+
+    def teach_by_writing(self):
+        from AppKit import NSAlert, NSMakeRect, NSScrollView, NSTextField, NSTextView, NSView
+        from . import skills
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Write a Skill")
+        alert.setInformativeText_("One step per line, as you'd tell someone new to the app.")
+        alert.addButtonWithTitle_("Save")
+        alert.addButtonWithTitle_("Cancel")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 340, 200))
+        name = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 174, 340, 24))
+        name.setPlaceholderString_("Name, e.g. Post on X")
+        place = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 144, 340, 24))
+        place.setPlaceholderString_("App or site, e.g. x.com")
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, 340, 136))
+        scroll.setBorderType_(2)
+        scroll.setHasVerticalScroller_(True)
+        steps = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 336, 136))
+        steps.setFont_(name.font())
+        scroll.setDocumentView_(steps)
+        for v in (name, place, scroll):
+            view.addSubview_(v)
+        alert.setAccessoryView_(view)
+        alert.window().setInitialFirstResponder_(name)
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        if alert.runModal() != 1000:  # the first button, Save
+            return
+        lines = [ln.strip() for ln in str(steps.string()).splitlines() if ln.strip()]
+        try:
+            sk = skills.save({"name": str(name.stringValue()), "where": str(place.stringValue()), "steps": lines}, "user")
+            self.build_skills_menu()
+            rumps.notification("Computer Use", "Skill saved", sk["name"])
+        except ValueError as e:
+            rumps.alert("Write a Skill", str(e).capitalize())
+
+    def teach_from_video(self):
+        from AppKit import NSOpenPanel
+        from . import skills
+        from .vision.base import parse_json
+        v = self._vision()
+        if v is None:
+            rumps.alert("Teach a Skill", "Add a vision model key to learn from videos (Settings › API Keys…).")
+            return
+        panel = NSOpenPanel.openPanel()
+        panel.setAllowedFileTypes_(["mov", "mp4", "m4v"])
+        panel.setMessage_("Choose a screen recording of the task being done (up to 500 MB).")
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        if panel.runModal() != 1:
+            return
+        path = str(panel.URL().path())
+        if __import__("os").path.getsize(path) > 500 * 1024 * 1024:
+            rumps.alert("Teach a Skill", "That recording is over 500 MB. Trim it to just the task and try again.")
+            return
+        name = self._prompt("Teach a Skill", "Name the skill this recording shows:") or ""
+        self.status.title = "Watching the recording…"
+        ask = lambda system, text, png: parse_json(v.current()._json(system, text, png))
+        self._learn_in_background(lambda: skills.from_video(path, ask, name))
+
+    def import_file(self, kind: str):
+        from AppKit import NSOpenPanel
+        from . import memory, skills
+        panel = NSOpenPanel.openPanel()
+        panel.setAllowedFileTypes_(["json"])
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        if panel.runModal() != 1:
+            return
+        try:
+            n = (skills.import_ if kind == "skills" else memory.import_)(str(panel.URL().path()))
+            self.build_skills_menu()
+            rumps.notification("Computer Use", f"Imported {n} {kind}", "")
+        except (ValueError, OSError) as e:
+            rumps.alert(f"Import {kind.capitalize()}", f"Couldn't import that file: {e}")
+
+    def export_file(self, kind: str, ids: list[str] | None = None, name: str = ""):
+        from AppKit import NSSavePanel
+        from . import memory, skills
+        panel = NSSavePanel.savePanel()
+        panel.setNameFieldStringValue_(name or f"Computer Use {kind.capitalize()}.json")
+        panel.setMessage_("Personal details (keys, emails, handles, names, links' paths) are removed.")
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        if panel.runModal() != 1:
+            return
+        path = str(panel.URL().path())
+        n = skills.export(path, ids) if kind == "skills" else memory.export(path)
+        rumps.notification("Computer Use", f"Exported {n} {kind}", path)
 
     # --- the shortcut ----------------------------------------------------------
 
@@ -800,6 +953,7 @@ class MenuBar(rumps.App):
         self.status.title = f"Working: {_short(task)}"
         self.set_icon(BUSY_ICON)
         self.refresh()
+        self.last_task, self.last_log = task, deque(maxlen=80)
         self.log(f"\n▶ {task}  [{self.agent.mode}]")
         threading.Thread(target=self.work, args=(self.agent, task), daemon=True).start()
 
@@ -820,6 +974,7 @@ class MenuBar(rumps.App):
             self.status.title = "Stopping…"
 
     def log(self, line: str):
+        self.last_log.append(line)
         LOG.parent.mkdir(parents=True, exist_ok=True)
         self._log_writes = getattr(self, "_log_writes", 0) + 1
         if self._log_writes % 200 == 0:
@@ -860,6 +1015,10 @@ class MenuBar(rumps.App):
                 self.update_ready = payload
                 self.update_item.title = "Installing when idle…"
                 self.finish_update()
+                continue
+            if kind == "skill":
+                self.build_skills_menu()
+                rumps.alert("Skills", payload)
                 continue
             if kind == "narrate":
                 say.speak(payload, self.settings.get("speaking_voice"), interrupt=False)
