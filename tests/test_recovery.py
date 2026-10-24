@@ -127,3 +127,18 @@ def test_jev_goes_to_the_place_not_to_a_link_it_should_share():
     assert _destination(task, ["https://x.com/compose/post"]) == "https://x.com/compose/post"  # a page a lesson named
     assert _destination("open https://news.ycombinator.com and read the top story", []) == "https://news.ycombinator.com"
     assert _destination("make a note saying hi", []) is None
+
+
+def test_an_unsure_done_needs_a_confident_check():
+    import types
+    from cu.agent import Agent
+    a = Agent.__new__(Agent)
+    a.jev = types.SimpleNamespace(check=lambda task, app, els, history: 0.6)
+    els, history = [object()], ["CLOSE_WINDOW"]
+    assert a.verify_done("close all the X tabs", "Chrome", els, history, sure=0.8)[0]
+    assert not a.verify_done("close all the X tabs", "Chrome", els, history, sure=0.39)[0]  # the tab run's case
+
+
+def test_retry_advice_fits_the_task():
+    advice = recovery.rule_based(["  not done yet (jev check p=0.44)"])["next_try"]
+    assert "Post" not in advice and "none are left" in advice

@@ -203,15 +203,17 @@ class Agent:
                     break  # replan from what's on screen now
         return self._report("stopped: hit the round limit")
 
-    def verify_done(self, task: str, app: str, els: list[Element], history: list[str]) -> tuple[bool, str]:
+    def verify_done(self, task: str, app: str, els: list[Element], history: list[str],
+                    sure: float = 1.0) -> tuple[bool, str]:
         """Ask Jev whether the task is achieved, from the screen and what was done. No keyword rules:
-        the model judges, and its probability is the answer."""
+        the model judges, and its probability is the answer. `sure` is how sure the agent was that it's
+        done; when it wasn't (below 0.5), the check has to be clearly confident instead of just leaning yes."""
         if not history:
             return False, "nothing has been done yet"
         if self.jev is None or not els:
             return True, "no verifier available"
         p = self.jev.check(task, app, els, history=history)
-        return p >= 0.5, f"jev check p={p:.2f}"
+        return p >= (0.5 if sure >= 0.5 else 0.7), f"jev check p={p:.2f}"
 
     def run_jev(self, task: str) -> str:
         """Jev picks op + target + text + app in one request per turn, from the AX tree."""
@@ -239,14 +241,14 @@ class Agent:
             self.narrate(narrate.jev_op(op, el.label if el else "", d["text"], d["app"]))
 
             if op == "DONE":
-                ok_verified, why = self.verify_done(task, app, els, history)
+                ok_verified, why = self.verify_done(task, app, els, history, sure=d["op_p"])
                 if not ok_verified:
                     self.log(f"  not done yet ({why})")
                     self._failed(history, f"FAILED: DONE was premature ({why}); finish the remaining steps")
                     seen_screens.setdefault(screen_sig, []).append("DONE")
                     misses = 0
                     continue
-                return self._report(f"done (verified; jev p={d['op_p']:.2f})")
+                return self._report(f"done (verified; {why}, done p={d['op_p']:.2f})")
 
             # Stuck: Jev says so, keeps missing, or repeats the same action three times.
             stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)

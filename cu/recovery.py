@@ -37,7 +37,8 @@ RULES = [
     (r"isn't a text field|no text field has focus",
      "Click the text box itself (its label is usually like 'Post text', 'Message', 'Search') before typing."),
     (r"premature|not done yet",
-     "It wasn't finished: check the result on screen and do the remaining step (often pressing a Post/Send/Save button)."),
+     "It wasn't finished: compare the screen with every part of the task and do what's left. When the task says "
+     "all or every, check that none are left before finishing."),
     (r"ran out of turns|hit the (round|action) limit",
      "It took too many steps. Go more directly: open the exact URL or use the app's shortcut for the action."),
     (r"no app named|could not open",
