@@ -33,6 +33,16 @@ TASKS = {
               "saying that you, {label}, are testing computer use with this account, and include the link "
               "https://github.com/ajokhai/computer-use-lite. The wording is up to you; for example: "
               "\"This is {label} testing computer use with my account. https://github.com/ajokhai/computer-use-lite\""),
+    # Mac apps only, no browser; scored part by part with scripts/check_desk.py {stamp}
+    "desk": ("Do this with the apps on this Mac, not in a browser. "
+             "1. Open Calculator and work out 1234 × 56. "
+             "2. In Notes, make a new note titled \"CU Bench {stamp}\" listing milk, eggs and bread, one per line, "
+             "then a last line with the Calculator result. "
+             "3. In Reminders, add \"Buy groceries {stamp}\" due tomorrow at 9 AM. "
+             "4. In Calendar, add an event \"CU review {stamp}\" tomorrow from 3:00 to 3:30 PM. "
+             "5. In TextEdit, write \"Shopping list {stamp}: milk, eggs, bread\" and save it as \"cu-bench-{stamp}\" "
+             "in a new folder named \"CU Bench {stamp}\" on the Desktop. "
+             "6. Quit Calculator, TextEdit, Reminders and Calendar, and leave that folder open in Finder."),
 }
 
 
@@ -67,9 +77,10 @@ def main():
     p.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = p.parse_args()
     for m in a.models:
-        task = TASKS[a.task].format(label=LABELS[m])
-        print(f"▶ {m}: {task}", flush=True)
-        r = run(m, task, a.timeout)
+        stamp = time.strftime("%H%M%S")  # unique per run, so a check can't be fooled by leftovers
+        task = TASKS[a.task].format(label=LABELS[m], stamp=stamp)
+        print(f"▶ {m} [stamp {stamp}]: {task}", flush=True)
+        r = run(m, task, a.timeout) | {"stamp": stamp}
         with open(a.out, "a") as f:
             f.write(json.dumps(r) + "\n")
         print(f"  {r['seconds']}s, {r['actions']} actions, exit {r['exit']}: {r['result']}", flush=True)
