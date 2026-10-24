@@ -1,11 +1,11 @@
-"""The task loop, in three modes:
+"""The task loop, in three modes (named by role; the vision model is currently Gemini):
 
-hybrid  Gemini plans a few atomic steps from a screenshot, Jev grounds each step to an
-        accessibility element for a fraction of a cent, Gemini vision takes any step Jev
-        can't place, then Gemini looks again and plans the next batch.
+hybrid  The vision model plans a few atomic steps from a screenshot, Jev grounds each step to
+        an accessibility element for a fraction of a cent, the vision model takes any step Jev
+        can't place, then looks again and plans the next batch.
 jev     Jev alone: each turn it reads the element list and picks the most probable next
         action and its target. No text generation, so it types phrases taken from the task.
-gemini  Gemini vision computer-use does everything.
+vision  The vision model's computer use does everything.
 """
 
 import os
@@ -61,8 +61,18 @@ def _jev_ok() -> bool:
     return _has_jev() and usage.available("jev")
 
 
+MODES = ("auto", "hybrid", "jev", "vision")
+MODE_NAMES = {"auto": "Auto", "hybrid": "Vision + Jev", "jev": "Jev Only", "vision": "Vision Only"}
+
+
+def normalize_mode(mode: str) -> str:
+    """Mode names are roles, not vendors; "gemini" is the old name for "vision"."""
+    return "vision" if mode == "gemini" else mode
+
+
 def pick_mode(mode: str = "auto") -> str:
     """Resolve "auto" to the best mode the configured keys and remaining quota allow."""
+    mode = normalize_mode(mode)
     if mode != "auto":
         return mode
     gemini, jev = _gemini_ok(), _jev_ok()
@@ -71,11 +81,11 @@ def pick_mode(mode: str = "auto") -> str:
     if jev:
         return "jev"
     if gemini:
-        return "gemini"
+        return "vision"
     if _has_gemini() or _has_jev():
         raise RuntimeError("Every configured model is out of quota right now (see Usage in the menu)")
-    raise RuntimeError("Add a Jev and/or Gemini API key (menu › API Keys…), "
-                       "or drive the Mac from Antigravity/Claude through the MCP tools, no key needed")
+    raise RuntimeError("Add a Jev and/or vision model key (menu › API Keys…), or connect an AI app "
+                       "(menu › Connect AI Apps) to drive the Mac with any model, no key needed")
 
 
 def ask_user(msg: str) -> bool:
@@ -87,7 +97,7 @@ def ask_user(msg: str) -> bool:
 
 @dataclass
 class Agent:
-    mode: str = "auto"  # auto | hybrid | jev | gemini
+    mode: str = "auto"  # auto | hybrid | jev | vision
     confirm_all: bool = False  # ask before every action
     allow_risky: bool = False  # skip the prompt for steps the planner marks risky
     min_jev_prob: float = 0.55
@@ -111,8 +121,8 @@ class Agent:
     def _clients(self):
         if self.jev is None and self.mode in ("hybrid", "jev"):
             self.jev = Jev()
-        if self.gemini is None and (self.mode in ("hybrid", "gemini") or _gemini_ok()):
-            # jev mode can still escalate to Gemini when stuck
+        if self.gemini is None and (self.mode in ("hybrid", "vision") or _gemini_ok()):
+            # jev mode can still escalate to the vision model when stuck
             self.gemini = Gemini(auto_switch=self.auto_switch, log=self.log)
 
     def run(self, task: str) -> str:
@@ -125,17 +135,17 @@ class Agent:
                 return self._report("stopped: mouse moved into a screen corner")
             except usage.QuotaExhausted as e:
                 if e.provider == "gemini" and self.mode == "jev":
-                    self.log("  Gemini is out of quota; Jev carries on alone")
+                    self.log("  the vision model is out of quota; Jev carries on alone")
                     self.gemini = None
                     continue
                 alt = None
                 if self.auto_switch:
-                    alt = "gemini" if e.provider == "jev" and _gemini_ok() else "jev" if e.provider == "gemini" and _jev_ok() else None
+                    alt = "vision" if e.provider == "jev" and _gemini_ok() else "jev" if e.provider == "gemini" and _jev_ok() else None
                 if alt is None:
                     back = f" · back in {usage.fmt_until(e.until)}" if e.until else ""
                     return self._report(f"stopped: {e}{back}")
                 self.log(f"  {e}; switching to {alt} mode")
-                self.narrate(f"{usage.pretty(e.provider) if e.provider != 'gemini' else 'Gemini'} ran out, switching to {alt}")
+                self.narrate(f"{'Jev' if e.provider == 'jev' else 'The vision model'} ran out, switching to {MODE_NAMES[alt]}")
                 self.mode = alt
                 self._clients()
                 note = "\n(Continue from the current screen; some of this may already be done.)"
@@ -144,7 +154,7 @@ class Agent:
     def _run(self, task: str) -> str:
         if self.mode == "jev":
             return self.run_jev(task)
-        if self.mode == "gemini":
+        if self.mode == "vision":
             ok, msg = self.gemini.act(task, max_turns=40, confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
             return self._report(msg)
 
@@ -219,7 +229,7 @@ class Agent:
                     ok_verified, why = self.verify_done(task, app, els, history)
                     if ok_verified and history:
                         return self._report(f"done ({why})")
-                    hint = "" if _has_gemini() else "; add a Gemini key so Gemini can take over"
+                    hint = "" if _has_gemini() else "; add a vision model key so it can take over"
                     return self._report(f"blocked: Jev is stuck at '{desc}'{hint}")
                 self.stats["gemini_steps"] += 1
                 ok, msg = self.gemini.act(f"Task: {task}\nDone so far: {history[-8:]}\nDo the next step or two, then stop.",
@@ -376,7 +386,7 @@ class Agent:
         return self._verify(s)
 
     def _verify(self, s: dict) -> tuple[bool, str]:
-        """Cheap post-check with Jev against the AX tree; Gemini replans if it fails."""
+        """Cheap post-check with Jev against the AX tree; the vision model replans if it fails."""
         if not s.get("expect") or self.jev is None:
             return True, ""
         app, els = ax_elements(limit=200)

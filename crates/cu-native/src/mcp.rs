@@ -271,8 +271,8 @@ impl<D: Desktop> Server<D> {
              "inputSchema": s(json!({"timeout_seconds": {"type": "number", "description": "Default 5, max 30."}}), &[])},
             {"name": "speak", "description": "Say a short sentence out loud to the user in their chosen voice.",
              "inputSchema": s(json!({"text": {"type": "string"}}), &["text"])},
-            {"name": "computer_task", "description": "Hand a whole task to the Computer Use app's own agent (needs its Jev or Gemini key) instead of stepping yourself. Risky steps (send/buy/delete) are refused unless allow_risky. Returns its log.",
-             "inputSchema": s(json!({"task": {"type": "string"}, "mode": {"type": "string", "enum": ["auto", "hybrid", "jev", "gemini"]}, "allow_risky": {"type": "boolean"}}), &["task"])},
+            {"name": "computer_task", "description": "Hand a whole task to the Computer Use app's own agent (needs its Jev or vision model key) instead of stepping yourself. Risky steps (send/buy/delete) are refused unless allow_risky. Returns its log.",
+             "inputSchema": s(json!({"task": {"type": "string"}, "mode": {"type": "string", "enum": ["auto", "hybrid", "jev", "vision"], "description": "auto: best available; hybrid: a vision model plans, Jev clicks; jev: Jev only; vision: a vision model does everything"}, "allow_risky": {"type": "boolean"}}), &["task"])},
             {"name": "check_permissions", "description": "Whether this server can read the screen (Screen Recording) and control apps (Accessibility), and what's frontmost.",
              "inputSchema": s(json!({}), &[])},
         ])
@@ -464,8 +464,11 @@ impl<D: Desktop> Server<D> {
                 })
             }
             "computer_task" => {
-                let mode = arg_str(args, "mode").unwrap_or("auto");
-                if !["auto", "hybrid", "jev", "gemini"].contains(&mode) {
+                let mode = match arg_str(args, "mode").unwrap_or("auto") {
+                    "gemini" => "vision", // the old name
+                    m => m,
+                };
+                if !["auto", "hybrid", "jev", "vision"].contains(&mode) {
                     return Ok(Reply::error(format!("unknown mode {mode:?}")));
                 }
                 Ok(match self.desk.run_task(req_str(args, "task")?, mode, arg_bool(args, "allow_risky")) {

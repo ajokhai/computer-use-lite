@@ -8,11 +8,11 @@ from cu.config import load_keys
 
 def main():
     load_keys()
-    p = argparse.ArgumentParser(prog="cu", description="Lite desktop computer-use with Gemini + Jev")
+    p = argparse.ArgumentParser(prog="cu", description="Computer use for the whole Mac")
     p.add_argument("task", nargs="*")
-    p.add_argument("--mode", choices=["auto", "hybrid", "jev", "gemini"], default="auto",
-                   help="auto: best your keys allow. hybrid: Gemini plans, Jev acts. "
-                        "jev: Jev only (cheapest, no Gemini). gemini: Gemini vision does everything.")
+    p.add_argument("--mode", choices=["auto", "hybrid", "jev", "vision", "gemini"], default="auto",
+                   help="auto: best your keys allow. hybrid: a vision model plans, Jev acts. "
+                        "jev: Jev only (cheapest). vision: a vision model does everything (gemini: old name).")
     p.add_argument("--confirm", action="store_true", help="ask before every action")
     p.add_argument("--yolo", action="store_true", help="don't ask before risky steps (send/buy/delete)")
     p.add_argument("--awake", action="store_true", help="keep the Mac awake while the task runs")

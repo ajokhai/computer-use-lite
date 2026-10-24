@@ -12,88 +12,18 @@ from AppKit import (
     NSEvent,
     NSEventMaskFlagsChanged,
     NSEventMaskKeyDown,
-    NSEventModifierFlagCommand,
-    NSEventModifierFlagControl,
-    NSEventModifierFlagFunction,
-    NSEventModifierFlagOption,
-    NSEventModifierFlagShift,
     NSImage,
     NSWorkspace,
 )
 
 from . import __version__, integration, say, updater, usage, voicepack
 from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
+from .shortcut import PRESETS, Detector, Shortcut
 from .logger import CRASH_LOG, setup_logging
 
 setup_logging()
 
 IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "cursorarrow.rays"
-SPACE_KEY = 49  # ⌃⌥Space starts/stops talking
-
-VOICE_SHORTCUTS = {
-    "control": {
-        "title": "Double-tap Control (Default)",
-        "short": "Control",
-        "symbol": "⌃",
-        "type": "modifier",
-        "mask": NSEventModifierFlagControl,
-    },
-    "option": {
-        "title": "Double-tap Option",
-        "short": "Option",
-        "symbol": "⌥",
-        "type": "modifier",
-        "mask": NSEventModifierFlagOption,
-    },
-    "command": {
-        "title": "Double-tap Command",
-        "short": "Command",
-        "symbol": "⌘",
-        "type": "modifier",
-        "mask": NSEventModifierFlagCommand,
-    },
-    "shift": {
-        "title": "Double-tap Shift",
-        "short": "Shift",
-        "symbol": "⇧",
-        "type": "modifier",
-        "mask": NSEventModifierFlagShift,
-    },
-    "fn": {
-        "title": "Double-tap Fn / Globe",
-        "short": "Fn",
-        "symbol": "🌐",
-        "type": "modifier",
-        "mask": NSEventModifierFlagFunction,
-    },
-    "control_option": {
-        "title": "Double-tap Control + Option",
-        "short": "Ctrl+Opt",
-        "symbol": "⌃⌥",
-        "type": "modifier",
-        "mask": NSEventModifierFlagControl | NSEventModifierFlagOption,
-    },
-    "f5": {
-        "title": "Press F5",
-        "short": "F5",
-        "symbol": "F5",
-        "type": "key",
-        "keyCode": 96,
-    },
-    "f6": {
-        "title": "Press F6",
-        "short": "F6",
-        "symbol": "F6",
-        "type": "key",
-        "keyCode": 97,
-    },
-}
-
-FUNCTION_KEYS = {
-    "f1": 122, "f2": 120, "f3": 99, "f4": 118,
-    "f5": 96, "f6": 97, "f7": 98, "f8": 100,
-    "f9": 101, "f10": 109, "f11": 103, "f12": 111,
-}
 
 
 class MenuBar(rumps.App):
@@ -111,80 +41,80 @@ class MenuBar(rumps.App):
         self.prompt_bar = None
 
         self.status = rumps.MenuItem("Idle")
-        self.new = rumps.MenuItem("New Task…", callback=self.new_task, key="n")
+        self.last = rumps.MenuItem("")
+        self.last._menuitem.setHidden_(True)  # shown once a task has finished
         self.stop_item = rumps.MenuItem("Stop", callback=None, key=".")
-        self.talk = rumps.MenuItem("Talk  ⌃⌥Space", callback=lambda _: self.talk_now())
+        self.ask = rumps.MenuItem("Ask Computer Use…", callback=lambda _: self.open_bar())
 
-        self.usage_menu = rumps.MenuItem("Usage")
         self.modes = {
-            "auto": rumps.MenuItem("Auto — best available", callback=lambda _: self.set_mode("auto")),
-            "hybrid": rumps.MenuItem("Hybrid — Gemini plans, Jev acts", callback=lambda _: self.set_mode("hybrid")),
-            "jev": rumps.MenuItem("Jev only — cheapest", callback=lambda _: self.set_mode("jev")),
-            "gemini": rumps.MenuItem("Gemini only", callback=lambda _: self.set_mode("gemini")),
+            "auto": rumps.MenuItem("Auto: Best Available", callback=lambda _: self.set_mode("auto")),
+            "hybrid": rumps.MenuItem("Vision + Jev: Vision Model Plans, Jev Acts", callback=lambda _: self.set_mode("hybrid")),
+            "jev": rumps.MenuItem("Jev Only: Cheapest", callback=lambda _: self.set_mode("jev")),
+            "vision": rumps.MenuItem("Vision Only: Vision Model Does Everything", callback=lambda _: self.set_mode("vision")),
         }
-        self.engine_menu = rumps.MenuItem("Listen With")
-        self.voice_out_menu = rumps.MenuItem("Speaking Voice")
-        self.voice_shortcut_menu = rumps.MenuItem("Voice Mode Shortcut")
-        self.engines: dict = {}
-        self.pending_engine = None  # chosen before the Voice Pack finished installing
         mode_menu = rumps.MenuItem("Mode")
         for item in self.modes.values():
             mode_menu.add(item)
 
         self.toggles = {
-            "hands_free": rumps.MenuItem("Hands-free — say “Computer, …”", callback=self.toggle),
-            "speak_replies": rumps.MenuItem("Speak replies", callback=self.toggle),
-            "narrate": rumps.MenuItem("Narrate while working", callback=self.toggle),
-            "awake": rumps.MenuItem("Keep Mac awake while working", callback=self.toggle),
-            "auto_switch": rumps.MenuItem("Switch models automatically when one runs out", callback=self.toggle),
-            "confirm_all": rumps.MenuItem("Ask before every action", callback=self.toggle),
-            "allow_risky": rumps.MenuItem("Don't ask before send / buy / delete", callback=self.toggle),
+            "open_listening": rumps.MenuItem("Start Listening When the Bar Opens", callback=self.toggle),
+            "hands_free": rumps.MenuItem("Hands-free: Say “Computer, …”", callback=self.toggle),
+            "speak_replies": rumps.MenuItem("Speak Replies", callback=self.toggle),
+            "narrate": rumps.MenuItem("Narrate While Working", callback=self.toggle),
+            "confirm_all": rumps.MenuItem("Ask Before Every Action", callback=self.toggle),
+            "allow_risky": rumps.MenuItem("Don't Ask Before Send, Buy or Delete", callback=self.toggle),
+            "awake": rumps.MenuItem("Keep Mac Awake", callback=self.toggle),
+            "auto_switch": rumps.MenuItem("Switch Models When One Runs Out", callback=self.toggle),
         }
 
-        settings_menu = rumps.MenuItem("Settings")
+        self.engine_menu = rumps.MenuItem("Listen With")
+        self.voice_out_menu = rumps.MenuItem("Speaking Voice")
+        self.engines: dict = {}
+        self.pending_engine = None  # chosen before the Voice Pack finished installing
         self.pack_item = rumps.MenuItem("Install Voice Pack…", callback=self.toggle_pack)
+        voice_menu = rumps.MenuItem("Voice")
+        t = self.toggles
+        _fill(voice_menu, [self.engine_menu, self.voice_out_menu, None,
+                           t["open_listening"], t["hands_free"], t["speak_replies"], t["narrate"], None, self.pack_item])
+
+        self.usage_menu = rumps.MenuItem("Usage")
+        working_menu = rumps.MenuItem("While Working")
+        _fill(working_menu, [t["confirm_all"], t["allow_risky"], None, t["awake"], t["auto_switch"]])
+
+        connect_menu = rumps.MenuItem("Connect AI Apps")
+        self.clients = {name: rumps.MenuItem(name, callback=lambda _, n=name: self.toggle_client(n))
+                        for name in integration.CLIENTS}
+        _fill(connect_menu, list(self.clients.values()))
+
+        self.shortcut_menu = rumps.MenuItem("Shortcut")
         self.update_item = rumps.MenuItem("Check for Updates…", callback=lambda _: self.check_updates(manual=True))
-        self.auto_update_item = rumps.MenuItem("Update automatically", callback=self.toggle_auto_update)
+        self.auto_update_item = rumps.MenuItem("Update Automatically", callback=self.toggle_auto_update)
         self.update_info = None
         self.update_ready = None
         self.login = rumps.MenuItem("Open at Login", callback=self.toggle_login)
-        connect_menu = rumps.MenuItem("Connect to")
-        self.clients = {name: rumps.MenuItem(name, callback=lambda _, n=name: self.toggle_client(n))
-                        for name in integration.CLIENTS}
-        for item in self.clients.values():
-            connect_menu.add(item)
-        for item in (
+        settings_menu = rumps.MenuItem("Settings")
+        _fill(settings_menu, [
             rumps.MenuItem("API Keys…", callback=self.edit_keys),
-            rumps.MenuItem("Voice Shortcut…", callback=lambda _: self.custom_voice_shortcut_dialog()),
-            self.pack_item,
-            None,
+            self.shortcut_menu,
             self.login,
-            connect_menu,
             None,
-            rumps.MenuItem("Grant Accessibility…", callback=lambda _: integration.open_privacy_settings("Accessibility")),
-            rumps.MenuItem("Grant Screen Recording…", callback=lambda _: integration.open_privacy_settings("ScreenCapture")),
+            rumps.MenuItem("Allow Accessibility…", callback=lambda _: integration.open_privacy_settings("Accessibility")),
+            rumps.MenuItem("Allow Screen Recording…", callback=lambda _: integration.open_privacy_settings("ScreenCapture")),
+            None,
+            self.update_item,
+            self.auto_update_item,
             None,
             rumps.MenuItem("Open Log", callback=lambda _: _open(LOG)),
             rumps.MenuItem("Open Crash Logs", callback=lambda _: _open(CRASH_LOG.parent)),
             None,
-            self.update_item,
-            self.auto_update_item,
             rumps.MenuItem(f"Version {__version__}", callback=None),
-        ):
-            settings_menu.add(item) if item is not None else settings_menu.add(rumps.separator)
+        ])
 
-        voice_menu = rumps.MenuItem("Voice")
-        for item in (self.engine_menu, self.voice_out_menu, self.voice_shortcut_menu, None,
-                     self.toggles["hands_free"], self.toggles["speak_replies"], self.toggles["narrate"]):
-            voice_menu.add(item) if item is not None else voice_menu.add(rumps.separator)
-        work_toggles = [v for k, v in self.toggles.items() if k not in ("hands_free", "speak_replies", "narrate")]
-
-        self.last = rumps.MenuItem("No tasks yet")
         self.menu = [
-            self.status, self.talk, self.new, self.stop_item, None,
-            self.usage_menu, mode_menu, voice_menu, None,
-            *work_toggles, None,
-            self.last, settings_menu, None,
+            self.status, self.last, self.stop_item, None,
+            self.ask, None,
+            mode_menu, voice_menu, self.usage_menu, None,
+            working_menu, connect_menu, settings_menu, None,
             rumps.MenuItem("Quit Computer Use", callback=self.quit, key="q"),
         ]
         usage.clear_exhausted()
@@ -195,7 +125,6 @@ class MenuBar(rumps.App):
         rumps.Timer(lambda _: self.check_updates(), 6 * 3600).start()
         rumps.Timer(self._first_update_check, 8).start()
         rumps.Timer(self._first_paint, 0.05).start()
-        self._install_hotkey()
 
     # --- state ---------------------------------------------------------------
 
@@ -221,15 +150,14 @@ class MenuBar(rumps.App):
         has_pack = voicepack.installed()
         self.build_engine_menu(has_pack)
         self.build_voice_out_menu(has_pack)
-        self.build_voice_shortcut_menu()
-        self.pack_item.title = "Remove Voice Pack" if voicepack.HELPER.exists() else "Install Voice Pack…"
+        self.build_shortcut_menu()
+        self.pack_item.title = "Remove Voice Pack…" if voicepack.HELPER.exists() else "Install Voice Pack…"
         self.pack_item.set_callback(None if (has_pack and not voicepack.HELPER.exists()) else self.toggle_pack)
         for key, item in self.toggles.items():
             item.state = self.settings[key]
         self.auto_update_item.state = self.settings["auto_update"]
-        running = self.agent is not None
-        self.new.set_callback(None if running else self.new_task)
-        self.stop_item.set_callback(self.stop if running else None)
+        self.ask.title = f"Ask Computer Use…   {self.shortcut().label}"
+        self.stop_item.set_callback(self.stop if self.agent is not None else None)
         bundled = integration.app_bundle() is not None
         self.login.state = integration.login_enabled()
         self.login.set_callback(self.toggle_login if bundled else None)
@@ -270,8 +198,8 @@ class MenuBar(rumps.App):
         self.settings["mode"] = mode
         save_settings(self.settings)
         self.refresh()
-        if hasattr(self, "prompt_bar") and self.prompt_bar:
-            self.prompt_bar._update_model_label(mode)
+        if self.prompt_bar is not None:
+            self.prompt_bar.set_mode(mode)
 
     def toggle(self, item):
         key = next(k for k, v in self.toggles.items() if v is item)
@@ -479,165 +407,64 @@ class MenuBar(rumps.App):
         save_settings(self.settings)
         self.refresh_usage()
 
-    def get_voice_shortcut_info(self, shortcut_key: str | None = None) -> dict:
-        key = shortcut_key or self.settings.get("voice_shortcut", "control")
-        if key in VOICE_SHORTCUTS:
-            return VOICE_SHORTCUTS[key]
-        if key.lower() in FUNCTION_KEYS:
-            code = FUNCTION_KEYS[key.lower()]
-            return {
-                "title": f"Press {key.upper()}",
-                "short": key.upper(),
-                "symbol": key.upper(),
-                "type": "key",
-                "keyCode": code,
-            }
-        return VOICE_SHORTCUTS["control"]
+    # --- the shortcut ----------------------------------------------------------
 
-    def build_voice_shortcut_menu(self):
-        if self.voice_shortcut_menu._menu is not None and len(self.voice_shortcut_menu):
-            self.voice_shortcut_menu.clear()
-        current = self.settings.get("voice_shortcut", "control")
-        for key, info in VOICE_SHORTCUTS.items():
-            item = rumps.MenuItem(info["title"], callback=lambda _, k=key: self.set_voice_shortcut(k))
-            item.state = (current == key)
-            self.voice_shortcut_menu.add(item)
-        self.voice_shortcut_menu.add(rumps.separator)
-        self.voice_shortcut_menu.add(rumps.MenuItem("Record Shortcut…", callback=lambda _: self.record_shortcut_dialog()))
-        self.voice_shortcut_menu.add(rumps.MenuItem("Type Custom Shortcut…", callback=lambda _: self.custom_voice_shortcut_dialog()))
+    def shortcut(self) -> Shortcut:
+        return Shortcut.from_setting(self.settings.get("shortcut") or self.settings.get("voice_shortcut"))
 
-    def record_shortcut_dialog(self):
+    def build_shortcut_menu(self):
+        if self.shortcut_menu._menu is not None and len(self.shortcut_menu):
+            self.shortcut_menu.clear()
+        current = self.shortcut()
+        for s in (PRESETS if current in PRESETS else [*PRESETS, current]):
+            item = rumps.MenuItem(s.title, callback=lambda _, s=s: self.set_shortcut(s))
+            item.state = s == current
+            self.shortcut_menu.add(item)
+        self.shortcut_menu.add(rumps.separator)
+        self.shortcut_menu.add(rumps.MenuItem("Record Shortcut…", callback=lambda _: self.record_shortcut()))
+
+    def record_shortcut(self):
         from .shortcut_recorder import show_shortcut_recorder
-        show_shortcut_recorder(self.set_voice_shortcut)
+        show_shortcut_recorder(self.shortcut(), self.set_shortcut)
 
-    def set_voice_shortcut(self, key: str):
-        self.settings["voice_shortcut"] = key
+    def set_shortcut(self, s: Shortcut):
+        self.settings["shortcut"] = s.to_setting()
+        self.settings.pop("voice_shortcut", None)
         save_settings(self.settings)
-        self.build_voice_shortcut_menu()
+        self.refresh()
         self._install_hotkey()
-        if hasattr(self, "prompt_bar") and self.prompt_bar:
-            self.prompt_bar.update_voice_shortcut_hint()
-
-    def custom_voice_shortcut_dialog(self):
-        current = self.settings.get("voice_shortcut", "control")
-        val = self._prompt(
-            "Voice Mode Shortcut",
-            "Choose a shortcut for Interactive Voice Mode.\n\n"
-            "Modifier double-tap presets: control, option, command, shift, fn, control_option\n"
-            "Function keys: f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12",
-            default=current,
-        )
-        if not val:
-            return
-        clean = val.strip().lower().replace(" ", "_").replace("+", "_")
-        aliases = {
-            "ctrl": "control",
-            "cmd": "command",
-            "opt": "option",
-            "ctrl_opt": "control_option",
-            "control_opt": "control_option",
-            "ctrl_option": "control_option",
-            "globe": "fn",
-        }
-        chosen = aliases.get(clean, clean)
-        if chosen in VOICE_SHORTCUTS or chosen in FUNCTION_KEYS:
-            self.set_voice_shortcut(chosen)
-            info = self.get_voice_shortcut_info(chosen)
-            rumps.alert("Voice Shortcut Updated", f"Voice mode shortcut is now: {info['title']}")
-        else:
-            rumps.alert("Unknown Shortcut", f"'{val}' is not a recognized key or modifier.\nSupported: control, option, command, shift, fn, control_option, or f1-f12.")
 
     def _install_hotkey(self):
-        if hasattr(self, "_monitors") and self._monitors:
-            for m in self._monitors:
-                try:
-                    NSEvent.removeMonitor_(m)
-                except Exception:
-                    pass
-            self._monitors = []
+        """Key shortcuts go through Carbon (swallowed system-wide); double-taps are spotted
+        by watching modifier changes, and any typing in between cancels them."""
+        from . import hotkey
+        for m in getattr(self, "_monitors", []):
+            NSEvent.removeMonitor_(m)
+        hotkey.unregister()
+        current = self.shortcut()
+        detector = Detector(current)
+        if current.kind == "key" and not hotkey.register(current.key_code, current.mods, self.shortcut_pressed):
+            rumps.notification("Computer Use", f"{current.label} is taken",
+                               "Another app uses that shortcut. Pick another in Settings › Shortcut.")
 
-        talk_mods = NSEventModifierFlagControl | NSEventModifierFlagOption
-        MOD_KEYCODES = {
-            "control": {59, 62},
-            "option": {58, 61},
-            "command": {55, 54},
-            "shift": {56, 60},
-            "fn": {63},
-        }
+        def on_key(event):
+            detector.key_down(event.keyCode(), event.modifierFlags(), time.monotonic())
 
-        tap_state = {
-            "is_down": False,
-            "last_release": 0.0,
-        }
+        def on_flags(event):
+            if detector.flags_changed(event.modifierFlags(), time.monotonic()):
+                self.shortcut_pressed()
 
-        def on_key_down(event):
-            # Check ⌃⌥Space
-            if event.keyCode() == SPACE_KEY and (event.modifierFlags() & talk_mods) == talk_mods:
-                self.talk_now()
-                return None
-
-            info = self.get_voice_shortcut_info()
-            if info.get("type") == "key" and event.keyCode() == info.get("keyCode"):
-                self.toggle_voice_mode()
-                return None
-
-            # Normal key press cancels any pending double tap
-            tap_state["is_down"] = False
-            tap_state["last_release"] = 0.0
-            return event
-
-        def on_flags_changed(event):
-            shortcut = self.settings.get("voice_shortcut", "control")
-            target_codes = MOD_KEYCODES.get(shortcut, {59, 62})
-            code = event.keyCode()
-            flags = event.modifierFlags()
-
-            # Identify if the target modifier is currently engaged
-            if shortcut == "control":
-                is_pressed = bool(flags & NSEventModifierFlagControl) and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagOption))
-            elif shortcut == "option":
-                is_pressed = bool(flags & NSEventModifierFlagOption) and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl))
-            elif shortcut == "command":
-                is_pressed = bool(flags & NSEventModifierFlagCommand) and not bool(flags & (NSEventModifierFlagControl | NSEventModifierFlagOption))
-            elif shortcut == "shift":
-                is_pressed = bool(flags & NSEventModifierFlagShift) and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl))
-            elif shortcut == "fn":
-                is_pressed = bool(flags & NSEventModifierFlagFunction)
-            elif shortcut == "control_option":
-                is_pressed = (flags & talk_mods) == talk_mods and not bool(flags & (NSEventModifierFlagCommand | NSEventModifierFlagShift))
-            else:
-                is_pressed = (code in target_codes) and bool(flags & NSEventModifierFlagControl)
-
-            now = time.monotonic()
-            if is_pressed and not tap_state["is_down"]:
-                tap_state["is_down"] = True
-                delta = now - tap_state["last_release"]
-                if tap_state["last_release"] > 0 and 0.04 <= delta <= 0.65:
-                    # Double-tap confirmed! Trigger immediately on second press
-                    tap_state["last_release"] = 0.0
-                    self.toggle_voice_mode()
-            elif not is_pressed and tap_state["is_down"]:
-                tap_state["is_down"] = False
-                tap_state["last_release"] = now
-
-        def on_global(event):
-            on_key_down(event)
-
-        def on_local(event):
-            return on_key_down(event)
-
-        def on_global_flags(event):
-            on_flags_changed(event)
-
-        def on_local_flags(event):
-            on_flags_changed(event)
-            return event
+        def local(handler):
+            def run(event):
+                handler(event)
+                return event
+            return run
 
         self._monitors = [
-            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, on_global),
-            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, on_local),
-            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, on_global_flags),
-            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, on_local_flags),
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, on_key),
+            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, local(on_key)),
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, on_flags),
+            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, local(on_flags)),
         ]
 
     def ensure_voice(self, then):
@@ -751,168 +578,123 @@ class MenuBar(rumps.App):
         if self.settings["hands_free"]:
             self.ensure_voice(self._listen)
 
-    def toggle_voice_mode(self):
-        """Toggle persistent interactive voice mode."""
-        if not hasattr(self, "prompt_bar") or self.prompt_bar is None:
+    # --- the bar and voice -----------------------------------------------------
+
+    def bar(self):
+        if self.prompt_bar is None:
             from .prompt_bar import PromptBar
-            self.prompt_bar = PromptBar(self)
+            self.prompt_bar = PromptBar.create(self)
+        return self.prompt_bar
 
-        is_visible = bool(self.prompt_bar.panel and self.prompt_bar.panel.isVisible())
-        if not is_visible:
-            self.voice_mode_active = False
+    def bar_listening(self) -> bool:
+        return self.prompt_bar is not None and self.prompt_bar.listening
 
-        self.voice_mode_active = not getattr(self, "voice_mode_active", False)
+    def open_bar(self, listening: bool | None = None):
+        bar = self.bar()
+        if not bar.is_visible():
+            bar.show(NSWorkspace.sharedWorkspace().frontmostApplication())
+        if self.settings["open_listening"] if listening is None else listening:
+            self.start_listening()
 
-        if self.voice_mode_active:
-            self.prompt_bar.show()
-            self.prompt_bar.set_voice_mode_state(True)
-            self.direct = True
-            self.ensure_voice(self._listen)
-            self.status.title = "🎙 Active Voice Mode"
-            self.say("I'm listening.")
+    def shortcut_pressed(self):
+        """Each press moves things along: open the bar (listening, if that's on), then start
+        listening, then send what was heard."""
+        if self.prompt_bar is None or not self.prompt_bar.is_visible():
+            self.open_bar()
+        elif self.prompt_bar.listening:
+            self.stop_listening()
         else:
-            self.prompt_bar.set_voice_mode_state(False)
-            self.prompt_bar.hide()
-            self.direct = False
-            if self.listener and self.listener.listening:
-                self.listener.stop()
-            if not self.settings["hands_free"]:
-                self._drop_listener()
-            self.status.title = "Idle"
-            self.set_icon(IDLE_ICON)
-            self.say("Voice mode off.")
+            self.start_listening()
 
-    def start_voice_hold(self):
-        """Double-tap and hold: listen as long as holding the voice shortcut key."""
-        if not hasattr(self, "prompt_bar") or self.prompt_bar is None:
-            from .prompt_bar import PromptBar
-            self.prompt_bar = PromptBar(self)
-        self.prompt_bar.show()
-        self.prompt_bar.set_hold_listening_state(True)
+    def start_listening(self):
+        bar = self.bar()
+        if not bar.is_visible():
+            bar.show()
+        bar.set_listening(True, f"press {self.shortcut().label}")
         self.direct = True
         self.ensure_voice(self._listen)
-        info = self.get_voice_shortcut_info()
-        self.status.title = f"🎙 Listening (holding {info['short']})…"
 
-    def end_voice_hold(self):
-        """Release double-tap and hold: end utterance immediately."""
-        if hasattr(self, "prompt_bar") and self.prompt_bar:
-            self.prompt_bar.set_hold_listening_state(False)
-        if self.listener and self.listener.listening:
+    def stop_listening(self, send: bool = True):
+        """End the utterance. With send, the final transcript arrives and runs; without, it's dropped."""
+        if self.listener is not None and self.listener.listening and send:
             self.listener._finish()
-        if not getattr(self, "voice_mode_active", False) and not self.settings["hands_free"]:
-            self._drop_listener()
-
-    def talk_now(self):
-        """Talk / ⌃⌥Space: start listening without a wake word, or end the utterance if already listening."""
-        if not hasattr(self, "prompt_bar") or self.prompt_bar is None:
-            from .prompt_bar import PromptBar
-            self.prompt_bar = PromptBar(self)
-        self.prompt_bar.show()
-        self.prompt_bar.is_voice_mode = True
-        if hasattr(self.prompt_bar, "voice_btn"):
-            self.prompt_bar.voice_btn.setTitle_("● REC")
-        self.prompt_bar.set_placeholder("Listening... Speak your task now (or press shortcut again)")
-
-        if self.listener and self.listener.listening and self.direct:
-            self.listener._finish()
-            if not getattr(self, "voice_mode_active", False) and not self.settings["hands_free"]:
-                self._drop_listener()
             return
-        self.direct = True
-        if self.listener and self.listener.listening:
-            return  # hands-free session already open; this utterance just skips the wake word
-        self.ensure_voice(self._listen)
+        self.direct = False
+        if self.prompt_bar is not None:
+            self.prompt_bar.set_listening(False)
+        if not self.settings["hands_free"]:
+            self._drop_listener()
 
     def _listen(self):
         if self.listener is None or self.listener.listening or self.awaiting_confirm:
             return
         self.listener.start()
         if self.listener.listening:
-            if (self.direct or getattr(self, "voice_mode_active", False)) and self.agent is None:
+            if self.direct and self.agent is None:
                 self.status.title = "Listening…"
 
     def on_speech(self, kind, text):
         from . import voice
 
+        listening = self.bar_listening()
         if kind == "status":
             self.status.title = _short(text, 60)
             return
         if kind == "error":
             self.direct = False
             self.status.title = f"Voice: {_short(text, 50)}"
-            if not getattr(self, "voice_mode_active", False) and not self.settings["hands_free"]:
+            if self.prompt_bar is not None:
+                self.prompt_bar.set_listening(False)
+            if not self.settings["hands_free"]:
                 self._drop_listener()
             return
         if say.is_echo(text):
-            return  # our own narration coming back through the mic
+            return  # our own voice coming back through the mic
         if kind == "partial":
-            # Barge-in interruption: cut computer speech if user starts speaking!
-            if say.speaking() and not say.is_echo(text):
-                say.stop()
-
-            if hasattr(self, "prompt_bar") and self.prompt_bar:
-                self.prompt_bar.update_speech_transcript(text, is_final=False)
-            if self.direct or getattr(self, "voice_mode_active", False) or voice.strip_wake_word(text) is not None or (self.agent and voice.is_stop(text)):
-                self.status.title = f"🎙 {_short(text, 56)}"
+            if say.speaking():
+                say.stop()  # the user is talking over us
+            if listening:
+                self.prompt_bar.show_transcript(text)
+            elif self.direct or voice.strip_wake_word(text) is not None or (self.agent and voice.is_stop(text)):
+                self.status.title = _short(text, 60)
             return
-        # final utterance
-        is_vm = getattr(self, "voice_mode_active", False)
-        direct, self.direct = self.direct, is_vm
-        self.set_icon(BUSY_ICON if self.agent else IDLE_ICON)
+
+        # a final utterance
+        direct, self.direct = self.direct, False
         command = voice.strip_wake_word(text)
-        if command is None and (direct or is_vm or (self.agent and voice.is_stop(text))):
+        if command is None and (direct or listening or (self.agent and voice.is_stop(text))):
             command = text.strip()
-        if hasattr(self, "prompt_bar") and self.prompt_bar and command:
-            self.prompt_bar.update_speech_transcript(command, is_final=True)
         if not command:
-            if self.agent is None:
-                self.status.title = "🎙 Listening…" if is_vm else "Idle"
-            if not is_vm and not self.settings["hands_free"]:
+            if listening:
+                self.direct = True  # nothing heard: keep listening
+            elif not self.settings["hands_free"]:
                 self._drop_listener()
             return
         if voice.is_stop(command):
             if self.agent:
                 self.stop(None)
                 self.say("Stopping.")
-            if not is_vm and not self.settings["hands_free"]:
+            if self.prompt_bar is not None:
+                self.prompt_bar.hide()
+            if not self.settings["hands_free"]:
                 self._drop_listener()
             return
 
-        cmd_lower = command.lower()
-        if any(phrase in cmd_lower for phrase in ("exit voice mode", "close voice mode", "turn off voice mode")):
-            self.toggle_voice_mode()
-            return
-
-        # Check for conversational / microphone check phrases so we respond politely instead of running a desktop task:
-        mic_check_phrases = (
-            "can you hear me", "do you hear me", "are you there",
-            "can you hear", "hear me", "testing testing", "hello", "hi there", "hey"
-        )
-        if any(cmd_lower.startswith(p) or cmd_lower == p for p in mic_check_phrases) and len(cmd_lower.split()) <= 6:
-            self.say("Yes, I hear you loud and clear! What can I help you do?")
-            if hasattr(self, "prompt_bar") and self.prompt_bar:
-                self.prompt_bar.set_placeholder("I hear you loud and clear! What can I help you do?")
-            if not is_vm and not self.settings["hands_free"]:
-                self._drop_listener()
-            return
-
-        self.log(f"🎙 {command}")
-        self.voice_mode_active = False
-        if hasattr(self, "prompt_bar") and self.prompt_bar:
-            self.prompt_bar.set_voice_mode_state(False)
-            self.prompt_bar.hide()
-        if not self.settings["hands_free"]:
-            self._drop_listener()
-
+        self.log(f"Heard: {command}")
+        self.voice_task = True
         if self.agent:
             # A new instruction mid-task replaces the current one.
             self.pending = command
+            if self.prompt_bar is not None:
+                self.prompt_bar.hide()
             self.stop(None)
             self.say("Okay, switching.")
+            return
+        self.say("On it.")
+        if listening and self.prompt_bar.is_visible():
+            self.prompt_bar.set_listening(False)
+            self.prompt_bar.show_transcript(command, final=True)  # shows it, then sends via start()
         else:
-            self.voice_task = True
-            self.say("On it.")
             self.start(command)
 
     def _drop_listener(self):
@@ -951,7 +733,7 @@ class MenuBar(rumps.App):
             self.events.put(("pack", str(e)))
 
     def say(self, text: str):
-        if self.settings.get("speak_replies") or getattr(self, "voice_mode_active", False):
+        if self.settings.get("speak_replies") or self.voice_task:
             say.speak(text, self.settings.get("speaking_voice"))
 
     def narrate(self, text: str):
@@ -966,29 +748,24 @@ class MenuBar(rumps.App):
             self.on_speech(*self.listener.events.get())
         if self.listener is not None:
             self.listener.tick()
-        is_vm = getattr(self, "voice_mode_active", False)
-        if (self.settings["hands_free"] or is_vm) and self.listener is not None and not self.listener.listening and not self.awaiting_confirm:
-            if is_vm or not say.speaking():
+        listening = self.bar_listening()
+        if (self.settings["hands_free"] or listening) and self.listener is not None and not self.listener.listening and not self.awaiting_confirm:
+            if listening:
+                self.direct = True
                 self._listen()
-        elif not self.settings["hands_free"] and not is_vm and self.listener is not None and not self.listener.listening:
+            elif not say.speaking():
+                self._listen()
+        elif not self.settings["hands_free"] and not listening and self.listener is not None and not self.listener.listening:
             self._drop_listener()
 
     # --- running -------------------------------------------------------------
 
-    def new_task(self, _):
-        if not hasattr(self, "prompt_bar") or self.prompt_bar is None:
-            from .prompt_bar import PromptBar
-            self.prompt_bar = PromptBar(self)
-        previous = NSWorkspace.sharedWorkspace().frontmostApplication()
-        self.prompt_bar.show(previous)
-
     def start(self, task: str):
         from .agent import Agent
 
-        self.voice_mode_active = False
-        if hasattr(self, "prompt_bar") and self.prompt_bar:
-            self.prompt_bar.set_voice_mode_state(False)
-            self.prompt_bar.hide()
+        self.direct = False
+        if self.prompt_bar is not None:
+            self.prompt_bar.hide(restore_focus=False)
         if not self.settings["hands_free"]:
             self._drop_listener()
 
@@ -1041,18 +818,6 @@ class MenuBar(rumps.App):
         self._voice_tick()
         while not self.events.empty():
             kind, payload = self.events.get()
-            if kind == "talk":
-                self.talk_now()
-                continue
-            if kind == "voice_toggle":
-                self.toggle_voice_mode()
-                continue
-            if kind == "voice_hold_start":
-                self.start_voice_hold()
-                continue
-            if kind == "voice_hold_end":
-                self.end_voice_hold()
-                continue
             if kind == "update":
                 self.on_update_checked(*payload)
                 continue
@@ -1112,12 +877,12 @@ class MenuBar(rumps.App):
                 done.set()
             elif kind == "finished":
                 self.agent = None
-                self.voice_mode_active = False
                 if not self.settings["hands_free"]:
                     self._drop_listener()
                 self.status.title = "Idle"
                 self.set_icon(IDLE_ICON)
                 self.last.title = f"Last: {_short(payload, 50)}"
+                self.last._menuitem.setHidden_(False)
                 self.refresh()
                 self.refresh_usage()
                 if self.pending:
@@ -1130,6 +895,11 @@ class MenuBar(rumps.App):
                     self.say(_spoken(payload))
                     self.voice_task = False
                 rumps.notification("Computer Use", "Task finished", payload)
+
+
+def _fill(menu, items):
+    for item in items:
+        menu.add(rumps.separator if item is None else item)
 
 
 def _env_key(provider: str) -> bool:

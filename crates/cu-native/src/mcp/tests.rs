@@ -343,6 +343,8 @@ fn windows_tasks_speech_permissions() {
     assert!(!err && text.contains("mode=jev risky=false"), "{text}");
     let (_, err, _) = call(&mut s, "computer_task", json!({"task": "x", "mode": "wild"}));
     assert!(err);
+    let (text, _, _) = call(&mut s, "computer_task", json!({"task": "x", "mode": "gemini"}));
+    assert!(text.contains("mode=vision"), "old mode name maps to vision: {text}");
     call(&mut s, "speak", json!({"text": "on it"}));
     assert_eq!(s.desk.log.last().unwrap(), "say on it");
     let (text, _, _) = call(&mut s, "check_permissions", json!({}));

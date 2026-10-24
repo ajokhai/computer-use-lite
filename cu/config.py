@@ -25,7 +25,9 @@ DEFAULTS = {
     "auto_update": True,  # install new releases when idle
     "last_version": "",
     "hands_free": False,  # always listening for "Computer, …"
-    "voice_shortcut": "control",  # shortcut for interactive voice mode (default: double-tap Control)
+    "shortcut": None,  # opens the bar; None = double-tap Control (see cu/shortcut.py)
+    "open_listening": True,  # the bar starts listening when the shortcut opens it
+    "recent_tasks": [],  # newest first; Up/Down in the bar steps through them
     "speak_replies": True,
     "narrate": False,  # talk through each step while working
     "speaking_voice": "mac:",  # "mac:<name>" (empty = system voice), "kokoro:<id>", or "gemini:<name>" (see cu/say.py)
@@ -50,6 +52,8 @@ def load_settings() -> dict:
         saved = {}
     merged = {**DEFAULTS, **saved}
     merged["limits"] = {**DEFAULTS["limits"], **saved.get("limits", {})}
+    if merged["mode"] == "gemini":  # modes are named by role now
+        merged["mode"] = "vision"
     return merged
 
 
