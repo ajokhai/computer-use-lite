@@ -10,6 +10,8 @@ from cu import menubar
 
 def app(tmp_path, monkeypatch, **state):
     monkeypatch.setattr(menubar, "MCP_LOG", tmp_path / "mcp.log")
+    monkeypatch.setattr(menubar, "AGENT_TASK", tmp_path / "agent-task")  # never the real files
+    monkeypatch.setattr(menubar, "STOP_REQUEST", tmp_path / "stop-request")
     a = menubar.MenuBar.__new__(menubar.MenuBar)
     a.agent, a.prompt_bar, a.listener, a.direct = None, None, None, False
     for k, v in state.items():
