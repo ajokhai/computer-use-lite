@@ -573,3 +573,25 @@ fn the_app_is_told_while_a_task_runs_and_when_it_is_done() {
     assert_eq!(state()["state"], "working", "a new call after done starts working again at once");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_persons_own_input_makes_the_agent_look_again() {
+    let dir = std::env::temp_dir().join(format!("cu-input-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Server::new(fake()).with_lessons_dir(dir.clone()).with_log(None);
+    std::fs::write(dir.join("user-input"), format!("{} click\n", crate::lessons::now() - 60.0)).unwrap();
+    call(&mut s, "list_screen_elements", json!({}));
+    let (_, err, _) = call(&mut s, "click_element", json!({"element": "e0"}));
+    assert!(!err, "input from before the look doesn't count");
+    std::fs::write(dir.join("user-input"), format!("{} click\n{} key\n", crate::lessons::now() - 60.0, crate::lessons::now() + 0.5)).unwrap();
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "e0"}));
+    assert!(err && text.contains("The person just used the Mac (a key)"), "{text}");
+    let (_, err, _) = call(&mut s, "check_permissions", json!({}));
+    assert!(!err, "reading is fine");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    call(&mut s, "take_screenshot", json!({}));
+    let (_, err, _) = call(&mut s, "click_element", json!({"element": "e0"}));
+    assert!(!err, "fine after looking again");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -26,6 +26,7 @@ Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over 
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
 Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the user stopped you (the mouse in a screen corner, or Escape pressed 3 times), stop and ask.
 Windows behind others still work: list_screen_elements with app reads any app's windows without bringing them forward; clicking or typing into one of its elements brings that window forward first. focus_window brings a window (even a minimized one) to the front.
+If a tool says the person just used the Mac, look again before the next action: they may have changed what's on screen.
 When the user's task is finished (or you give up on it), call task_done, so the Mac stops showing that an AI is working.
 Use speak() for short spoken updates when the user may be listening rather than watching.
 Call recall at the start of a task, and skills before a multi-step one. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember (and save_skill for a reusable multi-step way).";
@@ -61,6 +62,11 @@ pub struct Server<D: Desktop> {
     task_written: Option<f64>,
     /// Whether this process has taken a screenshot (until then x/y use the default scale).
     shot_taken: bool,
+    /// The app appends "<epoch> <kind>" here when the person clicks, scrolls or types while an AI
+    /// works; an action after that, without looking again, would act on a stale screen.
+    input_file: std::path::PathBuf,
+    /// When the agent last looked (list_screen_elements, take_screenshot, wait_for_change).
+    last_look: f64,
 }
 
 /// "working" is rewritten at most this often while a task goes on.
@@ -265,6 +271,7 @@ impl<D: Desktop> Server<D> {
                  lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()),
                  stop_file: lessons::default_dir().join("stop-request"), front: None,
                  task_file: lessons::default_dir().join("agent-task"), task_written: None, shot_taken: false,
+                 input_file: lessons::default_dir().join("user-input"), last_look: lessons::now(),
                  log: std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs/Computer Use/mcp.log")) }
     }
 
@@ -273,6 +280,7 @@ impl<D: Desktop> Server<D> {
         self.lessons = Store::new(dir.clone());
         self.stop_file = dir.join("stop-request");
         self.task_file = dir.join("agent-task");
+        self.input_file = dir.join("user-input");
         self.skills = Skills::new(dir);
         self
     }
@@ -292,6 +300,14 @@ impl<D: Desktop> Server<D> {
             let _ = std::fs::rename(&tmp, &self.task_file);
         }
         self.task_written = working.then_some(t);
+    }
+
+    /// The person's newest click/scroll/key (and its kind) if it came after the agent last looked.
+    fn input_since_look(&self) -> Option<String> {
+        let text = std::fs::read_to_string(&self.input_file).ok()?;
+        let mut last = text.lines().rev().find(|l| !l.trim().is_empty())?.split_whitespace();
+        let t: f64 = last.next()?.parse().ok()?;
+        (t > self.last_look).then(|| last.next().unwrap_or("input").to_string())
     }
 
     /// Whether the user pressed Escape 3 times in the last STOP_SECS (the app records when).
@@ -507,6 +523,16 @@ impl<D: Desktop> Server<D> {
         }
         if ACTING.contains(&name) && self.stop_requested() {
             return Ok(Reply::error("Stopped: the user pressed Escape 3 times to stop. Don't continue until the user says to."));
+        }
+        if ACTING.contains(&name) {
+            if let Some(kind) = self.input_since_look() {
+                return Ok(Reply::error(format!(
+                    "The person just used the Mac (a {kind}); look at the screen again (list_screen_elements or take_screenshot) before acting."
+                )));
+            }
+        }
+        if matches!(name, "list_screen_elements" | "take_screenshot" | "wait_for_change") {
+            self.last_look = lessons::now();
         }
         match name {
             "take_screenshot" => {
