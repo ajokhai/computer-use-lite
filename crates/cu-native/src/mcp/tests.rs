@@ -239,14 +239,16 @@ fn coordinates_are_screenshot_pixels_both_ways() {
     let (text, err, _) = call(&mut s, "list_screen_elements", json!({}));
     assert!(!err);
     assert!(text.contains("e0 Button \"Send\" at (50,25)"), "{text}");
-    call(&mut s, "click_at", json!({"x": 50, "y": 25}));
+    let (text, _, _) = call(&mut s, "click_at", json!({"x": 50, "y": 25}));
     assert_eq!(s.desk.log.last().unwrap(), "click 100,50 Left x1");
+    assert!(text.contains("no screenshot yet") && text.contains("1 pixel = 2.00 points"), "the space is spelled out: {text}");
 
     let (_, _, res) = call(&mut s, "take_screenshot", json!({"max_width": 640}));
     assert_eq!(res["content"][0]["type"], "image");
     assert_eq!(res["content"][0]["mimeType"], "image/png");
-    call(&mut s, "click_at", json!({"x": 10, "y": 10, "double": true, "button": "right"}));
+    let (text, _, _) = call(&mut s, "click_at", json!({"x": 10, "y": 10, "double": true, "button": "right"}));
     assert_eq!(s.desk.log.last().unwrap(), "click 40,40 Right x2");
+    assert_eq!(text, "clicked (10, 10)");
 }
 
 #[test]

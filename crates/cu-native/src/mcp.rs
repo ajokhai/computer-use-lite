@@ -59,6 +59,8 @@ pub struct Server<D: Desktop> {
     task_file: std::path::PathBuf,
     /// When "working" was last written (writes are spaced out), or None after "done".
     task_written: Option<f64>,
+    /// Whether this process has taken a screenshot (until then x/y use the default scale).
+    shot_taken: bool,
 }
 
 /// "working" is rewritten at most this often while a task goes on.
@@ -262,7 +264,7 @@ impl<D: Desktop> Server<D> {
         Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
                  lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()),
                  stop_file: lessons::default_dir().join("stop-request"), front: None,
-                 task_file: lessons::default_dir().join("agent-task"), task_written: None,
+                 task_file: lessons::default_dir().join("agent-task"), task_written: None, shot_taken: false,
                  log: std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs/Computer Use/mcp.log")) }
     }
 
@@ -341,6 +343,17 @@ impl<D: Desktop> Server<D> {
     /// Screenshot pixels -> global screen points.
     fn to_points(&self, x: f64, y: f64) -> (f64, f64) {
         (self.ox + x * self.scale, self.oy + y * self.scale)
+    }
+
+    /// Before any screenshot, say which space x/y were taken in (they aren't screen points).
+    fn space_note(&self) -> String {
+        if self.shot_taken {
+            return String::new();
+        }
+        format!(
+            " (no screenshot yet, so x/y were read as pixels of a {DEFAULT_SHOT_WIDTH}-wide screenshot of the main display, 1 pixel = {:.2} points, as list_screen_elements reports them)",
+            self.scale
+        )
     }
 
     /// Global screen points -> screenshot pixels, for output.
@@ -500,6 +513,7 @@ impl<D: Desktop> Server<D> {
                 let w = args.get("max_width").and_then(Value::as_u64).unwrap_or(DEFAULT_SHOT_WIDTH as u64).clamp(320, 2560) as u32;
                 let shot = self.desk.screenshot(w)?;
                 (self.scale, self.ox, self.oy) = (shot.scale, shot.ox, shot.oy);
+                self.shot_taken = true;
                 let data = base64::engine::general_purpose::STANDARD.encode(&shot.png);
                 Ok(Reply {
                     content: vec![
@@ -544,7 +558,7 @@ impl<D: Desktop> Server<D> {
                     return Ok(Reply::error("that point is off every screen; use coordinates from the latest take_screenshot"));
                 }
                 self.desk.click(x, y, button(args)?, if arg_bool(args, "double") { 2 } else { 1 });
-                Ok(Reply::text(format!("clicked ({}, {})", arg_f64(args, "x")?, arg_f64(args, "y")?)))
+                Ok(Reply::text(format!("clicked ({}, {}){}", arg_f64(args, "x")?, arg_f64(args, "y")?, self.space_note())))
             }
             "type_text" => {
                 let text = args.get("text").and_then(Value::as_str).ok_or("missing required argument \"text\"")?;
@@ -613,12 +627,12 @@ impl<D: Desktop> Server<D> {
                     return Ok(Reply::error("a point is off every screen; use coordinates from the latest take_screenshot"));
                 }
                 self.desk.drag(from, to);
-                Ok(Reply::text("dragged"))
+                Ok(Reply::text(format!("dragged{}", self.space_note())))
             }
             "move_mouse" => {
                 let (x, y) = self.to_points(arg_f64(args, "x")?, arg_f64(args, "y")?);
                 self.desk.move_mouse(x, y);
-                Ok(Reply::text("moved"))
+                Ok(Reply::text(format!("moved{}", self.space_note())))
             }
             "open_app" => Ok(match self.desk.open_app(req_str(args, "name")?) {
                 Ok(msg) => Reply::text(msg),
