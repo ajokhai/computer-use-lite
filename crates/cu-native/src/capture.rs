@@ -47,7 +47,17 @@ unsafe extern "C" {
     fn CGImageDestinationCreateWithData(data: CFTypeRef, type_: CFTypeRef, count: usize, options: CFTypeRef) -> CFTypeRef;
     fn CGImageDestinationAddImage(dest: CFTypeRef, image: CGImageRef, properties: CFTypeRef);
     fn CGImageDestinationFinalize(dest: CFTypeRef) -> bool;
+    fn CFDataCreate(alloc: CFTypeRef, bytes: *const u8, len: isize) -> CFTypeRef;
+    fn CGImageSourceCreateWithData(data: CFTypeRef, options: CFTypeRef) -> CFTypeRef;
+    fn CGImageSourceCreateImageAtIndex(src: CFTypeRef, index: usize, options: CFTypeRef) -> CGImageRef;
 }
+
+/// Set once the window server's capture has stalled in this process; later captures go
+/// straight to `screencapture`.
+static SLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How long to wait for the window server before using `screencapture` instead. On some macOS
+/// versions the capture is proxied through ScreenCaptureKit and can sit on a 30 s timeout.
+const CG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 unsafe fn cf_str(s: &str) -> CFTypeRef {
     let c = CString::new(s).unwrap_or_default();
@@ -128,14 +138,63 @@ pub fn capture_main(max_width: u32) -> Option<Shot> {
 }
 
 /// Capture one display (its bounds in global points) at point resolution, no wider than `max_width`.
+/// Uses the window server, or `screencapture` if that stalls (then for the rest of the process)
+/// or if CU_SCREENCAPTURE is set.
 pub fn capture_display(bounds: CGRect, max_width: u32) -> Option<Shot> {
+    use std::sync::atomic::Ordering;
+    if !SLOW.load(Ordering::Relaxed) && std::env::var_os("CU_SCREENCAPTURE").is_none() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(unsafe {
+                encode(
+                    CGWindowListCreateImage(bounds, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION),
+                    bounds,
+                    max_width,
+                )
+            });
+        });
+        match rx.recv_timeout(CG_TIMEOUT) {
+            Ok(shot) => return shot,
+            // The stalled thread finishes on its own; its result is dropped.
+            Err(_) => SLOW.store(true, Ordering::Relaxed),
+        }
+    }
+    capture_with_tool(bounds, max_width)
+}
+
+/// The same capture through Apple's `screencapture` tool (full pixel resolution, scaled here).
+fn capture_with_tool(bounds: CGRect, max_width: u32) -> Option<Shot> {
+    let path = std::env::temp_dir().join(format!("cu-mcp-shot-{}.png", std::process::id()));
+    let (o, s) = (bounds.origin, bounds.size);
+    let ok = std::process::Command::new("/usr/sbin/screencapture")
+        .args(["-x", "-t", "png", &format!("-R{},{},{},{}", o.x, o.y, s.width, s.height)])
+        .arg(&path)
+        .status()
+        .is_ok_and(|st| st.success());
+    let bytes = if ok { std::fs::read(&path).ok() } else { None };
+    let _ = std::fs::remove_file(&path);
+    let bytes = bytes?;
     unsafe {
-        let mut image = CGWindowListCreateImage(
-            bounds,
-            K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
-            K_CG_NULL_WINDOW_ID,
-            K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION,
-        );
+        let data = CFDataCreate(ptr::null(), bytes.as_ptr(), bytes.len() as isize);
+        if data.is_null() {
+            return None;
+        }
+        let src = CGImageSourceCreateWithData(data, ptr::null());
+        CFRelease(data);
+        if src.is_null() {
+            return None;
+        }
+        let image = CGImageSourceCreateImageAtIndex(src, 0, ptr::null());
+        CFRelease(src);
+        // At point resolution or narrower, like the window server path.
+        let width = if max_width > 0 { max_width.min(s.width as u32) } else { s.width as u32 };
+        encode(image, bounds, width)
+    }
+}
+
+/// Downscale `image` to at most `max_width` and encode it as PNG; releases `image`.
+unsafe fn encode(mut image: CGImageRef, bounds: CGRect, max_width: u32) -> Option<Shot> {
+    unsafe {
         if image.is_null() {
             return None;
         }
