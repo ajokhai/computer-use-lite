@@ -7,6 +7,7 @@ pub mod capture;
 pub mod decision;
 pub mod desktop;
 pub mod input;
+pub mod lessons;
 pub mod mcp;
 
 use std::ffi::{CStr, CString};

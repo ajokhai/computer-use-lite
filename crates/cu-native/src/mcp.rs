@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 
 use crate::decision::truncate_chars;
 use crate::desktop::{Button, Desktop};
+use crate::lessons::{self, Store};
 use crate::NativeElement;
 
 pub const SERVER_NAME: &str = "computer-use-lite";
@@ -23,7 +24,8 @@ Loop: look (list_screen_elements, and take_screenshot when the elements don't te
 Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over clicking. Prefer click_element (an id from list_screen_elements, or a description) over click_at.
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
 Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the mouse is in a screen corner, the user pressed the emergency stop: stop and ask.
-Use speak() for short spoken updates when the user may be listening rather than watching.";
+Use speak() for short spoken updates when the user may be listening rather than watching.
+Call recall at the start of a task. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember.";
 
 /// Tools that change something on screen; all refused while the emergency stop is active.
 const ACTING: &[&str] = &[
@@ -41,6 +43,7 @@ pub struct Server<D: Desktop> {
     /// Global position of the latest screenshot's display (the main display until one is taken).
     ox: f64,
     oy: f64,
+    lessons: Store,
 }
 
 /// A tool's outcome: content blocks, and whether it failed.
@@ -185,7 +188,14 @@ impl<D: Desktop> Server<D> {
     pub fn new(desk: D) -> Self {
         let (w, _) = desk.main_display();
         let scale = if w > DEFAULT_SHOT_WIDTH as f64 { w / DEFAULT_SHOT_WIDTH as f64 } else { 1.0 };
-        Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0 }
+        Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
+                 lessons: Store::new(lessons::default_dir()) }
+    }
+
+    /// Keep lessons somewhere else (tests).
+    pub fn with_lessons_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.lessons = Store::new(dir);
+        self
     }
 
     pub fn desktop(&self) -> &D {
@@ -287,6 +297,17 @@ impl<D: Desktop> Server<D> {
              "inputSchema": s(json!({"text": {"type": "string"}}), &["text"])},
             {"name": "computer_task", "description": "Hand a whole task to the Computer Use app's own agent (needs its Jev or vision model key) instead of stepping yourself. Risky steps (send/buy/delete) are refused unless allow_risky. Returns its log.",
              "inputSchema": s(json!({"task": {"type": "string"}, "mode": {"type": "string", "enum": ["auto", "hybrid", "jev", "vision"], "description": "auto: best available; hybrid: a vision model plans, Jev clicks; jev: Jev only; vision: a vision model does everything"}, "allow_risky": {"type": "boolean"}}), &["task"])},
+            {"name": "recall", "description": "Before starting on an app or site, read what earlier runs learned there (what failed and what worked).",
+             "inputSchema": s(json!({"where": {"description": "App name or site (e.g. \"x.com\"), or a list; the frontmost app is always included.",
+                                               "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                                     "task": {"type": "string", "description": "What you're about to do, to rank lessons."},
+                                     "limit": {"type": "integer", "description": "Default 6, max 20."}}), &[])},
+            {"name": "remember", "description": "After recovering from a mistake or finding a non-obvious way to do something, save it: where, what happened, and the fix, so the next run starts smarter.",
+             "inputSchema": s(json!({"where": {"type": "string", "description": "App name or site, e.g. \"x.com\" (default: the frontmost app)."},
+                                     "what": {"type": "string", "description": "What happened or went wrong."},
+                                     "fix": {"type": "string", "description": "What worked, or what to try instead."},
+                                     "worked": {"type": "boolean", "description": "True once the fix is confirmed."},
+                                     "task": {"type": "string"}}), &["what", "fix"])},
             {"name": "check_permissions", "description": "Whether this server can read the screen (Screen Recording) and control apps (Accessibility), and what's frontmost.",
              "inputSchema": s(json!({}), &[])},
         ])
@@ -489,6 +510,28 @@ impl<D: Desktop> Server<D> {
                     Ok(log) => Reply::text(log),
                     Err(e) => Reply::error(e),
                 })
+            }
+            "recall" => {
+                let mut places: Vec<String> = match args.get("where") {
+                    Some(Value::String(w)) => vec![w.clone()],
+                    Some(Value::Array(ws)) => ws.iter().filter_map(Value::as_str).map(String::from).collect(),
+                    _ => Vec::new(),
+                };
+                places.push(self.desk.frontmost());
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(6) as usize;
+                let found = self.lessons.recall(&places, arg_str(args, "task").unwrap_or(""), limit)?;
+                Ok(Reply::text(if found.is_empty() {
+                    format!("No lessons yet for {}. After you work something out, call remember.", places.join(", ").to_lowercase())
+                } else {
+                    found.join("\n")
+                }))
+            }
+            "remember" => {
+                let front = self.desk.frontmost();
+                let place = arg_str(args, "where").unwrap_or(&front).to_string();
+                let seen = self.lessons.remember(&place, arg_str(args, "task").unwrap_or(""), req_str(args, "what")?,
+                                                 req_str(args, "fix")?, arg_bool(args, "worked"), "mcp client")?;
+                Ok(Reply::text(format!("remembered for {} (seen {seen} time{})", place.to_lowercase(), if seen == 1 { "" } else { "s" })))
             }
             "check_permissions" => {
                 let (ax, screen) = self.desk.permissions();

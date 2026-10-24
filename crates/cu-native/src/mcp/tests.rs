@@ -127,7 +127,9 @@ fn call(s: &mut Server<Fake>, name: &str, args: Value) -> (String, bool, Value) 
 }
 
 fn server() -> Server<Fake> {
-    Server::new(fake())
+    let dir = std::env::temp_dir().join(format!("cu-mcp-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    Server::new(fake()).with_lessons_dir(dir)
 }
 
 #[test]
@@ -146,7 +148,7 @@ fn initialize_negotiates_version_and_lists_tools() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     for want in ["take_screenshot", "list_screen_elements", "click_element", "click_at", "type_text", "press_keys",
                  "scroll", "drag", "move_mouse", "open_app", "open_url", "select_menu", "read_element",
-                 "list_windows", "wait_for_change", "speak", "computer_task", "check_permissions"] {
+                 "list_windows", "wait_for_change", "speak", "computer_task", "check_permissions", "recall", "remember"] {
         assert!(names.contains(&want), "missing {want}");
     }
     for t in tools {
@@ -378,4 +380,17 @@ fn an_exact_name_beats_nearby_text() {
     let els = vec![el("e10", "AXButton", "Next", 10, 10), el("e12", "AXButton", "Post", 50, 10)];
     assert_eq!(best_match("Button \"Post\" (near Next)", &els).unwrap().0, 1);
     assert_eq!(best_match("post", &els).unwrap().0, 1);
+}
+
+#[test]
+fn lessons_round_trip_through_the_tools() {
+    let mut s = server();
+    let (text, _, _) = call(&mut s, "recall", json!({"where": "x.com"}));
+    assert!(text.starts_with("No lessons yet for x.com, mail"), "{text}");
+    let (text, err, _) = call(&mut s, "remember", json!({"where": "x.com", "what": "Post clicked Next", "fix": "click the button labelled Post", "worked": true}));
+    assert!(!err && text == "remembered for x.com (seen 1 time)", "{text}");
+    let (text, _, _) = call(&mut s, "recall", json!({"where": ["X.com"], "task": "post a tweet"}));
+    assert_eq!(text, "- On x.com: Post clicked Next → click the button labelled Post (worked)");
+    let (_, err, _) = call(&mut s, "remember", json!({"what": "no fix"}));
+    assert!(err);
 }
