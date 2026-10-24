@@ -150,7 +150,12 @@ Live runs on a real Mac (October 2026), checked by hand or by script, not by the
 | Gemini 3.8 Flash | Antigravity's signed-in agent through `cu-mcp`, no API key | 3/6 (Notes, Reminders, Calendar) | No time left | Timed out at 10 min (103 calls, on the save dialog). A first try timed out with 1/6 while Antigravity waited for someone to allow a tool. |
 | Jev | the app's agent, Jev Only | 0/6 | Not run: Jev can't see which reminder or event it would delete, and these were the owner's real calendars. The checker deleted its items. | 75 s, 3 attempts, then stuck |
 
-More models are on the way.
+### Benchmark it yourself
+Results from more models and more Macs make this better. To add yours:
+1. Build from source (see Development), or install the app and set up a key for the model you want to test.
+2. Run `uv run python scripts/bench.py <model> --task desk`. It drives your real Mac, so close anything private first. It creates a note, a reminder, a calendar event and a Desktop folder, all marked with the run's code, and the tidy-up afterwards deletes them. Models that can't see the screen should use `--no-cleanup`, so they don't delete the wrong thing.
+3. It prints each part's score and appends the full log to `bench-results.jsonl`. To test an AI app through MCP instead, give it the task text from `TASKS["desk"]` in `scripts/bench.py`, then score it with `scripts/check_desk.py <code>` and `--cleaned`.
+4. Open an issue or pull request with your results: the model, how it ran (API or MCP), your Mac and macOS version, and the scores. New tasks are welcome too.
 
 ### What the benchmarks taught us
 Each run's surprises became a fix in the code or a lesson in memory, so the next run starts from them.
@@ -167,8 +172,11 @@ Each run's surprises became a fix in the code or a lesson in memory, so the next
 - **Jev alone can't do a multi-app task like this yet.** It jumped ahead to Calendar, gave the event the wrong time, and typed text from several steps into one note. Its retry advice also told it to try a compose URL, which only makes sense in a browser; for apps it now suggests the app's shortcut or menu. Jev works best paired with a vision model.
 - **The checker had bugs too:** it wanted 69104 and rejected Gemini's correct "69,104"; deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now handles all three.
 
-## Ports
-Computer Use is macOS only for now. Help with a port is welcome: see the draft pull requests for [Linux](https://github.com/ajokhai/computer-use-lite/pull/1) and [Windows](https://github.com/ajokhai/computer-use-lite/pull/2). Each one links a guide to what needs replacing.
+## Contributing: ports and improvements
+Computer Use is open source, and help is welcome.
+- **Windows and Linux ports:** it's macOS only for now. The draft pull requests for [Linux](https://github.com/ajokhai/computer-use-lite/pull/1) and [Windows](https://github.com/ajokhai/computer-use-lite/pull/2) each link a guide: port one Rust trait, and every MCP tool works on the new system. Comment on a PR to claim a piece.
+- **Make it better:** the lessons in "What the benchmarks taught us" are good first issues: faster runs (fewer screenshots), apps whose content is missing from the accessibility tree, and harder benchmarks.
+- **Share benchmarks and skills:** run the benchmark on your model and Mac, or export a skill pack (Skills › Export Skills…) for an app you know well.
 
 ## Development
 - `uv run pytest` runs the Python tests.
