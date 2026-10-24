@@ -33,10 +33,11 @@ def test_lessons_stay_bounded(monkeypatch):
 def test_export_removes_personal_details_and_imports_elsewhere(tmp_path):
     memory.record("x.com", "post \"my secret plan\" as @ajokhai",
                   "typed \"my secret plan\" for josh@example.com at https://x.com/ajokhai/status/123456789",
-                  "open https://x.com/compose/post, paste key sk-abcdef123456 later", "worked")
+                  "click 'Post text', then open https://x.com/compose/post, paste key sk-abcdef123456 later", "worked")
     out = tmp_path / "lessons-export.json"
     assert memory.export(out, names=["Josh"]) == 1
     text = out.read_text()
+    assert "'Post text'" in text  # UI labels are kept: they're what makes a lesson useful
     for secret in ("secret plan", "ajokhai", "josh@", "123456789", "sk-abcdef", "status", "Josh"):
         assert secret not in text, secret
     data = json.loads(text)

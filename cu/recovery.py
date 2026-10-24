@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import memory
+from . import memory, skills
 
 MAX_ATTEMPTS = 3
 NOTES = "\n\n[Notes for this attempt]"  # everything after this in a task is guidance, not the task
@@ -92,13 +92,16 @@ class Recovery:
     log: Callable[[str], None] = print
     model: str = ""
     max_attempts: int = MAX_ATTEMPTS
+    learn_skills: bool = True
     history: list[dict] = field(default_factory=list)
 
     def run(self, task: str) -> tuple[bool, str]:
         task = strip_notes(task)
         keys = memory.places(task, self.where())
         past = memory.recall(keys, task)
+        known = skills.find(task, keys)
         notes = [f"Lessons from earlier runs:\n{memory.as_text(past)}"] if past else []
+        notes += [f"A skill that fits:\n{skills.as_text(sk)}" for sk in known]
         ok, report = False, ""
         for n in range(1, self.max_attempts + 1):
             ok, report = self.attempt(with_notes(task, notes))
@@ -106,6 +109,7 @@ class Recovery:
                 if self.history:  # it took a retry: the guidance that got it there is worth keeping
                     last = self.history[-1]
                     self._learn(keys, task, last["diagnosis"], last.get("lesson") or last["next_try"], "worked")
+                self._skills(task, keys, known, ok)
                 return ok, report
             if not retryable(report) or n == self.max_attempts:
                 break
@@ -116,13 +120,27 @@ class Recovery:
                 self.log("  not retrying: it needs you")
                 break
             self.log(f"  trying again: {verdict['next_try']}")
-            notes = [n_ for n_ in notes if n_.startswith("Lessons")]
+            notes = [n_ for n_ in notes if n_.startswith(("Lessons", "A skill"))]
             notes.append(f"Attempt {n} failed: {verdict['diagnosis']}\nThis time: {verdict['next_try']}")
             keys = memory.places(task, self.where()) or keys
         if self.history:  # what didn't work is a lesson too
             last = self.history[-1]
             self._learn(keys, task, last["diagnosis"], last.get("lesson") or last["next_try"], "failed")
+        self._skills(task, keys, known, ok)
         return ok, report
+
+    def _skills(self, task: str, keys: list[str], used: list[dict], ok: bool):
+        """Score the skills that were handed over, and maybe learn a new one from a task that worked."""
+        for sk in used:
+            skills.result(sk["id"], ok)
+        if ok and self.learn_skills:
+            try:
+                made = skills.learn(task, self.log_tail(), ok, bool(self.history), self.ask_json, keys)
+            except Exception as e:  # learning is a bonus; never let it break a finished task
+                self.log(f"  couldn't save a skill ({e})")
+                made = None
+            if made:
+                self.log(f"  learned a skill: {made['name']} ({made['where']})")
 
     def _assess(self, task: str, report: str, past: list[dict]) -> dict:
         log = self.log_tail()

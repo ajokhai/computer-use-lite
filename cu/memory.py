@@ -129,23 +129,43 @@ _SCRUB = [
     (re.compile(r"\b(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]+)"), "<key>"),
     (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "<email>"),
     (re.compile(r"(?<![\w/])@[A-Za-z0-9_]{2,30}\b"), "@<user>"),
-    (re.compile(r"https?://([^/\s]+)[^\s]*"), r"https://\1"),  # keep the site, drop paths and queries
     (re.compile(r"/Users/[^/\s]+"), "/Users/<user>"),
     (re.compile(r"\+?\d[\d\s().-]{7,}\d"), "<number>"),
     (re.compile(r"\b\d{5,}\b"), "<number>"),
-    (re.compile(r"[\"“”']([^\"“”']{3,})[\"“”']"), "\"<text>\""),  # quoted text is usually the user's own content
 ]
+# URL path segments that name an action or page, not a person: these paths are kept, others dropped.
+COMMON_PATHS = {"compose", "post", "posts", "new", "create", "edit", "settings", "home", "search", "explore",
+                "messages", "inbox", "notifications", "i", "intent", "tweet", "bookmarks", "lists", "login",
+                "signin", "account", "watch", "results", "drive", "docs", "document", "sheets", "slides", "mail",
+                "calendar", "upload", "share", "help", "about", "dashboard", "projects", "issues", "pulls", "feed"}
+URL = re.compile(r"https?://([^/\s?#]+)(/[^\s?#]*)?[^\s]*")
+
+
+def _url(m: re.Match) -> str:
+    """Keep the site, and the path only when every part of it is a common page or action name."""
+    parts = [p for p in (m.group(2) or "").split("/") if p]
+    keep = parts and len(parts) <= 3 and all(p.lower() in COMMON_PATHS for p in parts)
+    return f"https://{m.group(1)}" + ("/" + "/".join(parts) if keep else "")
+
+
+QUOTED = re.compile(r"[\"“”']([^\"“”']{3,})[\"“”']")
+
+
+def private_bits(task: str) -> list[str]:
+    """The user's own content in a task (quoted text), to scrub wherever it was copied. UI labels in
+    lessons ('Post text') are quoted too, so only what came from the task is removed."""
+    return [m.strip() for m in QUOTED.findall(task or "") if len(m.strip()) > 2]
 
 
 def sanitize(text: str, names: list[str] | None = None) -> str:
     """Remove what could identify a person or account: keys, emails, @handles, URL paths, home
-    folders, phone and account numbers, quoted content, and any given names."""
-    out = str(text or "")
+    folders, phone and account numbers, and any given names or private text."""
+    out = URL.sub(_url, str(text or ""))
     for pattern, repl in _SCRUB:
         out = pattern.sub(repl, out)
-    for n in names or []:
+    for n in sorted(names or [], key=len, reverse=True):
         if n and len(n) > 1:
-            out = re.sub(re.escape(n), "<name>", out, flags=re.I)
+            out = re.sub(re.escape(n), "<text>" if " " in n else "<name>", out, flags=re.I)
     return _clip(out)
 
 
@@ -160,7 +180,8 @@ def export(path, names: list[str] | None = None) -> int:
     except KeyError:
         pass
     names = [*(names or []), *me]
-    lessons = [{"where": l["where"], "what": sanitize(l.get("what"), names), "fix": sanitize(l.get("fix"), names),
+    lessons = [{"where": l["where"], "what": sanitize(l.get("what"), names + private_bits(l.get("task", ""))),
+                "fix": sanitize(l.get("fix"), names + private_bits(l.get("task", ""))),
                 "outcome": l.get("outcome", "failed"), "seen": l.get("seen", 1)} for l in all_lessons()]
     with open(path, "w") as f:
         json.dump({"format": EXPORT_FORMAT, "version": 1, "lessons": lessons}, f, indent=1)
