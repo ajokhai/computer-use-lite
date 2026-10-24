@@ -23,9 +23,9 @@ The app bundles `cu-mcp`, a native MCP server written in Rust. It needs no API k
   Use the path where your copy of `cu-mcp` actually is. When you build from source, it's `crates/cu-native/target/release/cu-mcp`.
 - **Permissions belong to the app that starts the server.** That's your editor or AI app, so give it Accessibility and Screen Recording too. The `check_permissions` tool tells you what's missing.
 
-**Tools:** `take_screenshot`, `list_screen_elements`, `click_element`, `click_at`, `type_text`, `press_keys`, `scroll`, `drag`, `move_mouse`, `open_app`, `open_url`, `select_menu`, `read_element`, `list_windows`, `wait_for_change`, `speak`, `computer_task`, `check_permissions`.
+**Tools:** `take_screenshot`, `list_screen_elements`, `click_element`, `click_at`, `type_text`, `press_keys`, `scroll`, `drag`, `move_mouse`, `open_app`, `open_url`, `select_menu`, `read_element`, `list_windows`, `wait_for_change`, `speak`, `computer_task`, `check_permissions`, plus memory: `recall`, `remember`, `skills`, `save_skill` (see Learning).
 
-All x/y coordinates are pixels of the latest screenshot. `computer_task` hands a whole task to the app's own agent, which needs its own keys (see Modes).
+All x/y coordinates are pixels of the latest screenshot, which covers the display showing the frontmost app. `computer_task` hands a whole task to the app's own agent, which needs its own keys (see Modes).
 
 ## Modes (the menu bar agent)
 Pick one under **Mode**. Modes are named by role. The vision model can be Claude, OpenAI, Gemini, any OpenRouter model, or a local model (Ollama, LM Studio, any OpenAI-compatible server). Pick it in **Mode › Vision Model**, or leave it on Auto, which uses the first with a key and quota in the order Claude, OpenAI, Gemini, OpenRouter, Local. Screenshots follow the display with the frontmost window, so it works across several screens.
@@ -53,7 +53,7 @@ One shortcut opens a floating bar. The default is **double-tap Control**. Change
 ## Menu
 - Status, **Last** (once a task has finished), **Stop** (⌘.)
 - **Ask Computer Use…**
-- **Mode**, **Voice**, **Usage**
+- **Mode**, **Voice**, **Usage**, **Skills**
 - **While Working**, **Connect AI Apps**, **Settings**
 - **Quit Computer Use**
 
@@ -88,6 +88,19 @@ Picking a voice plays a short preview.
 
 ### Voice Pack
 `Computer Use Voice Pack <version>.zip` is next to the DMG. It's a separate download so that the app download stays small. Install it from **Voice › Install Voice Pack…**; the app also looks for it in Downloads. Choosing a model or voice that needs the pack offers to install it.
+
+## Learning: lessons and skills
+Computer Use gets better at your apps the more it's used, whichever model does the work (the bar's agent or an AI app connected through MCP).
+
+- **Recovering:** when an attempt fails, it works out what went wrong from the screen, tries a different way (up to three attempts), and never repeats the same failing action.
+- **Lessons** are short notes per app or site, such as "the Post box needs a click before typing". They're saved after a recovery and read back at the start of the next task there. At most 200 are kept; the least useful go first.
+- **Skills** are named, step-by-step ways of doing something ("Post on X", "Make a note in Notes"), listed by app or site under **Skills**. They come from three places:
+  - **Teach a Skill › From the Last Task…** keeps how the task you just ran was done.
+  - **Write It Myself…**: a name, the app or site, and one step per line.
+  - **From a Screen Recording…**: it watches a recording of you doing the task (needs a vision model).
+  - It also learns skills itself, but selectively: only after a success that took a retry, or the second success of the same kind of task, and only when the vision model judges it reusable. At most 100 are kept; skills you made yourself are never dropped automatically.
+- **Sharing:** **Skills › Export Skills… / Import Skills…** (and the same for lessons) write a file someone else can import. Keys, emails, @handles, names, link paths and quoted text are removed on export.
+- Everything stays on your Mac in `~/Library/Application Support/Computer Use/` (`lessons.json`, `skills.json`).
 
 ## Usage and switching
 - **Usage** in the menu shows one line per provider; open it for each model's count, its dashboard and limits. Daily counts reset at midnight Pacific; Jev resets on your billing day.
