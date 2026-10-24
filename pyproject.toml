@@ -1,6 +1,6 @@
 [project]
 name = "cu"
-version = "0.1.14"
+version = "0.1.15"
 description = "Lite macOS computer-use harness: Gemini plans, Jev acts"
 readme = "README.md"
 requires-python = ">=3.12"
