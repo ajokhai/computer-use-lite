@@ -166,9 +166,10 @@ def cleaned(stamp: str) -> dict:
 
 
 def clean(stamp: str):
-    osa(f'tell application "Notes" to delete (every note whose name contains "CU Bench {stamp}")')
-    osa(f'tell application "Reminders" to delete (every reminder whose name contains "Buy groceries {stamp}")')
-    osa(f'tell application "Calendar" to repeat with c in calendars\n delete (every event of c whose summary contains "CU review {stamp}")\n end repeat')
+    """Delete anything the run made: matched by the run's unique stamp, so a misnamed item goes too."""
+    osa(f'tell application "Notes" to delete (every note whose name contains "{stamp}")')
+    osa(f'tell application "Reminders" to delete (every reminder whose name contains "{stamp}")')
+    osa(f'tell application "Calendar" to repeat with c in calendars\n delete (every event of c whose summary contains "{stamp}")\n end repeat')
     folder = DESKTOP / f"CU Bench {stamp}"
     if folder.is_dir():
         shutil.rmtree(folder)
