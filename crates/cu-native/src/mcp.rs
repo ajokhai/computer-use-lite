@@ -26,6 +26,7 @@ Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over 
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
 Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the user stopped you (the mouse in a screen corner, or Escape pressed 3 times), stop and ask.
 Windows behind others still work: list_screen_elements with app reads any app's windows without bringing them forward; clicking or typing into one of its elements brings that window forward first. focus_window brings a window (even a minimized one) to the front.
+When the user's task is finished (or you give up on it), call task_done, so the Mac stops showing that an AI is working.
 Use speak() for short spoken updates when the user may be listening rather than watching.
 Call recall at the start of a task, and skills before a multi-step one. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember (and save_skill for a reusable multi-step way).";
 
@@ -54,7 +55,14 @@ pub struct Server<D: Desktop> {
     /// The frontmost app when the last call finished: if it's different now, the user switched
     /// apps, and element ids or descriptions would land in the wrong app.
     front: Option<String>,
+    /// The app shows "an AI is working" from this file: {"state": "working"|"done", "at": secs}.
+    task_file: std::path::PathBuf,
+    /// When "working" was last written (writes are spaced out), or None after "done".
+    task_written: Option<f64>,
 }
+
+/// "working" is rewritten at most this often while a task goes on.
+const TASK_WRITE_SECS: f64 = 5.0;
 
 /// How long after Escape ×3 acting tools are refused.
 const STOP_SECS: f64 = 10.0;
@@ -254,6 +262,7 @@ impl<D: Desktop> Server<D> {
         Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
                  lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()),
                  stop_file: lessons::default_dir().join("stop-request"), front: None,
+                 task_file: lessons::default_dir().join("agent-task"), task_written: None,
                  log: std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs/Computer Use/mcp.log")) }
     }
 
@@ -261,8 +270,26 @@ impl<D: Desktop> Server<D> {
     pub fn with_lessons_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.lessons = Store::new(dir.clone());
         self.stop_file = dir.join("stop-request");
+        self.task_file = dir.join("agent-task");
         self.skills = Skills::new(dir);
         self
+    }
+
+    /// Tell the app whether an AI is mid-task (for its menu bar icon). Written atomically.
+    fn set_task_state(&mut self, working: bool) {
+        let t = lessons::now();
+        if working && self.task_written.is_some_and(|w| t - w < TASK_WRITE_SECS) {
+            return;
+        }
+        let body = json!({"state": if working { "working" } else { "done" }, "at": t}).to_string();
+        let tmp = self.task_file.with_extension("tmp");
+        if let Some(dir) = self.task_file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(&tmp, body).is_ok() {
+            let _ = std::fs::rename(&tmp, &self.task_file);
+        }
+        self.task_written = working.then_some(t);
     }
 
     /// Whether the user pressed Escape 3 times in the last STOP_SECS (the app records when).
@@ -423,6 +450,8 @@ impl<D: Desktop> Server<D> {
              "inputSchema": s(json!({"element": element}), &["element"])},
             {"name": "list_windows", "description": "Every on-screen window across all apps, front to back, with its app, title and bounds.",
              "inputSchema": s(json!({}), &[])},
+            {"name": "task_done", "description": "Call once the user's task is finished or abandoned: the Mac stops showing that an AI is working.",
+             "inputSchema": s(json!({"summary": {"type": "string", "description": "One line on how it went."}}), &[])},
             {"name": "focus_window", "description": "Bring an app's window to the front (un-minimizing it if needed): the one whose title contains title, else its main window.",
              "inputSchema": s(json!({"app": {"type": "string", "description": "App name, e.g. \"Notes\"."},
                                      "title": {"type": "string", "description": "Part of the window's title."}}), &["app"])},
@@ -630,6 +659,10 @@ impl<D: Desktop> Server<D> {
                 }
                 Ok(Reply::text(out))
             }
+            "task_done" => {
+                self.set_task_state(false);
+                Ok(Reply::text("noted: the task is over"))
+            }
             "focus_window" => Ok(match self.desk.focus_window(req_str(args, "app")?, arg_str(args, "title")) {
                 Ok(msg) => Reply::text(msg),
                 Err(e) => Reply::error(e),
@@ -760,6 +793,9 @@ impl<D: Desktop> Server<D> {
                 };
                 self.log_call(name, &args, &outcome.replace('\n', " "), t0.elapsed().as_millis());
                 self.front = Some(self.desk.frontmost());
+                if name != "task_done" {
+                    self.set_task_state(true);
+                }
                 match reply {
                     Ok(r) => json!({"content": r.content, "isError": r.is_error}),
                     Err(e) if e.starts_with("unknown tool") => return Some(error(id, -32602, &e)),

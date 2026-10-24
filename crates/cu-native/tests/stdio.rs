@@ -7,7 +7,11 @@ use serde_json::{json, Value};
 
 #[test]
 fn real_server_answers_over_stdio() {
+    // A home of its own, so the test doesn't write the real call log or agent-task (the icon reads both).
+    let home = std::env::temp_dir().join(format!("cu-mcp-stdio-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_cu-mcp"))
+        .env("HOME", &home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

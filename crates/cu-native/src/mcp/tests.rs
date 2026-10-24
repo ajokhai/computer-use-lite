@@ -555,3 +555,19 @@ fn acting_after_the_user_switches_apps_is_refused_until_looking_again() {
     let (_, err, _) = call(&mut s, "click_element", json!({"element": "e0"}));
     assert!(!err, "fine once it has looked again");
 }
+
+#[test]
+fn the_app_is_told_while_a_task_runs_and_when_it_is_done() {
+    let dir = std::env::temp_dir().join(format!("cu-task-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Server::new(fake()).with_lessons_dir(dir.clone()).with_log(None);
+    let state = || -> Value { serde_json::from_str(&std::fs::read_to_string(dir.join("agent-task")).unwrap()).unwrap() };
+    call(&mut s, "list_screen_elements", json!({}));
+    assert_eq!(state()["state"], "working");
+    let (text, err, _) = call(&mut s, "task_done", json!({"summary": "posted it"}));
+    assert!(!err && text.contains("over"), "{text}");
+    assert_eq!(state()["state"], "done");
+    call(&mut s, "check_permissions", json!({}));
+    assert_eq!(state()["state"], "working", "a new call after done starts working again at once");
+    let _ = std::fs::remove_dir_all(dir);
+}
