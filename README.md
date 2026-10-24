@@ -123,7 +123,7 @@ Computer Use gets better at your apps the more it's used, whichever model does t
 
 ## Safety
 - It doesn't stop to ask unless it's about to **pay for something or permanently delete something your request didn't ask for**. Asking it to "post a tweet" or "delete the spam" is permission enough. Tick **While Working › Don't Ask Before Paying or Deleting** to never be asked; **Ask Before Every Action** makes it ask before every step.
-- **Emergency stop:** move the mouse hard into any screen corner. This stops both the app and `cu-mcp`. You can also use **Stop** (⌘.).
+- **Emergency stop:** press **Escape three times** quickly, or move the mouse hard into any screen corner. Either stops both the app's agent and any AI app driving the Mac through `cu-mcp`. You can also use **Stop** in the menu (⌘.).
 - Your clipboard never leaves your Mac.
 
 ## Development

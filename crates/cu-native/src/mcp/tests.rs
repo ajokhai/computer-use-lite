@@ -449,3 +449,20 @@ fn two_identical_fields_are_reported_not_guessed() {
     let (_, err, _) = call(&mut s, "click_element", json!({"element": "e1"}));
     assert!(!err, "an id picks one");
 }
+
+#[test]
+fn escape_three_times_stops_acting_tools_for_a_while() {
+    let dir = std::env::temp_dir().join(format!("cu-stop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Server::new(fake()).with_lessons_dir(dir.clone()).with_log(None);
+    let stop = |age: f64| std::fs::write(dir.join("stop-request"), (crate::lessons::now() - age).to_string()).unwrap();
+    stop(1.0);
+    let (text, err, _) = call(&mut s, "click_at", json!({"x": 1, "y": 1}));
+    assert!(err && text.contains("Escape 3 times"), "{text}");
+    let (_, err, _) = call(&mut s, "check_permissions", json!({}));
+    assert!(!err, "reading is still allowed");
+    stop(STOP_SECS + 1.0);
+    let (_, err, _) = call(&mut s, "click_at", json!({"x": 1, "y": 1}));
+    assert!(!err, "the stop wears off");
+    let _ = std::fs::remove_dir_all(dir);
+}

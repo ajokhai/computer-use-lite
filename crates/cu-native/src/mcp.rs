@@ -24,7 +24,7 @@ pub const INSTRUCTIONS: &str = "Tools to see and operate the user's whole Mac (a
 Loop: look (list_screen_elements, and take_screenshot when the elements don't tell you enough), do one action, then look again to check it worked.
 Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over clicking. Prefer click_element (an id from list_screen_elements, or a description) over click_at.
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
-Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the mouse is in a screen corner, the user pressed the emergency stop: stop and ask.
+Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the user stopped you (the mouse in a screen corner, or Escape pressed 3 times), stop and ask.
 Use speak() for short spoken updates when the user may be listening rather than watching.
 Call recall at the start of a task, and skills before a multi-step one. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember (and save_skill for a reusable multi-step way).";
 
@@ -48,7 +48,12 @@ pub struct Server<D: Desktop> {
     skills: Skills,
     /// One line per tool call (for timing, diagnosis and learning); None in tests.
     log: Option<std::path::PathBuf>,
+    /// The app writes the time here when the user presses Escape 3 times.
+    stop_file: std::path::PathBuf,
 }
+
+/// How long after Escape ×3 acting tools are refused.
+const STOP_SECS: f64 = 10.0;
 
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024; // then rotated to mcp.log.1, like the app's logs
 
@@ -234,14 +239,25 @@ impl<D: Desktop> Server<D> {
         let scale = if w > DEFAULT_SHOT_WIDTH as f64 { w / DEFAULT_SHOT_WIDTH as f64 } else { 1.0 };
         Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
                  lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()),
+                 stop_file: lessons::default_dir().join("stop-request"),
                  log: std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs/Computer Use/mcp.log")) }
     }
 
     /// Keep lessons somewhere else (tests).
     pub fn with_lessons_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.lessons = Store::new(dir.clone());
+        self.stop_file = dir.join("stop-request");
         self.skills = Skills::new(dir);
         self
+    }
+
+    /// Whether the user pressed Escape 3 times in the last STOP_SECS (the app records when).
+    fn stop_requested(&self) -> bool {
+        let Some(t) = std::fs::read_to_string(&self.stop_file).ok().and_then(|s| s.trim().parse::<f64>().ok()) else {
+            return false;
+        };
+        let age = lessons::now() - t;
+        (-1.0..STOP_SECS).contains(&age)
     }
 
     /// Write the call log somewhere else, or nowhere (None).
@@ -416,6 +432,9 @@ impl<D: Desktop> Server<D> {
             return Ok(Reply::error(
                 "Stopped: the mouse is in a screen corner, which is the user's emergency stop. Don't continue until the user says to.",
             ));
+        }
+        if ACTING.contains(&name) && self.stop_requested() {
+            return Ok(Reply::error("Stopped: the user pressed Escape 3 times to stop. Don't continue until the user says to."));
         }
         match name {
             "take_screenshot" => {
