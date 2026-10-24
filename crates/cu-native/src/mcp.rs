@@ -268,7 +268,8 @@ impl<D: Desktop> Server<D> {
     /// The places a call is about: the given app/site name(s) plus the frontmost app.
     fn places(&self, args: &Value) -> Vec<String> {
         let mut places: Vec<String> = match args.get("where") {
-            Some(Value::String(w)) => vec![w.clone()],
+            // Plain text, comma-separated (strict clients reject "string or list"); a list still works.
+            Some(Value::String(w)) => w.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect(),
             Some(Value::Array(ws)) => ws.iter().filter_map(Value::as_str).map(String::from).collect(),
             _ => Vec::new(),
         };
@@ -386,8 +387,7 @@ impl<D: Desktop> Server<D> {
             {"name": "computer_task", "description": "Hand a whole task to the Computer Use app's own agent (needs its Jev or vision model key) instead of stepping yourself. Risky steps (send/buy/delete) are refused unless allow_risky. Returns its log.",
              "inputSchema": s(json!({"task": {"type": "string"}, "mode": {"type": "string", "enum": ["auto", "hybrid", "jev", "vision"], "description": "auto: best available; hybrid: a vision model plans, Jev clicks; jev: Jev only; vision: a vision model does everything"}, "allow_risky": {"type": "boolean"}}), &["task"])},
             {"name": "recall", "description": "Before starting on an app or site, read what earlier runs learned there (what failed and what worked).",
-             "inputSchema": s(json!({"where": {"description": "App name or site (e.g. \"x.com\"), or a list; the frontmost app is always included.",
-                                               "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+             "inputSchema": s(json!({"where": {"type": "string", "description": "App name or site (e.g. \"x.com\"); separate several with commas. The frontmost app is always included."},
                                      "task": {"type": "string", "description": "What you're about to do, to rank lessons."},
                                      "limit": {"type": "integer", "description": "Default 6, max 20."}}), &[])},
             {"name": "remember", "description": "After recovering from a mistake or finding a non-obvious way to do something, save it: where, what happened, and the fix, so the next run starts smarter.",
@@ -398,8 +398,7 @@ impl<D: Desktop> Server<D> {
                                      "task": {"type": "string"}}), &["what", "fix"])},
             {"name": "skills", "description": "Step-by-step skills for this app or site that worked before. Check before starting a multi-step task.",
              "inputSchema": s(json!({"task": {"type": "string", "description": "What you're about to do."},
-                                     "where": {"description": "App name or site, or a list; the frontmost app is always included.",
-                                               "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                                     "where": {"type": "string", "description": "App name or site; separate several with commas. The frontmost app is always included."},
                                      "limit": {"type": "integer", "description": "Default 2, max 5."}}), &["task"])},
             {"name": "save_skill", "description": "Save a reusable, step-by-step way of doing something in an app or site, once it has worked, so later runs (any AI) can follow it.",
              "inputSchema": s(json!({"name": {"type": "string", "description": "Short, e.g. \"Post on X\"."},

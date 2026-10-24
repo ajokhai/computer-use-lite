@@ -12,7 +12,8 @@ _SUPPORT = Path.home() / "Library" / "Application Support"
 
 # name -> [(config file, top-level key)]. VS Code uses "servers" (+ "type": "stdio"); the rest "mcpServers".
 CLIENTS = {
-    "Antigravity": [(Path.home() / ".gemini" / "antigravity" / "mcp_config.json", "mcpServers"),
+    "Antigravity": [(Path.home() / ".gemini" / "antigravity-ide" / "mcp_config.json", "mcpServers"),  # Antigravity IDE
+                    (Path.home() / ".gemini" / "antigravity" / "mcp_config.json", "mcpServers"),
                     (Path.home() / ".gemini" / "config" / "mcp_config.json", "mcpServers")],
     "VS Code": [(_SUPPORT / "Code" / "User" / "mcp.json", "servers"),
                 (_SUPPORT / "Code - Insiders" / "User" / "mcp.json", "servers")],

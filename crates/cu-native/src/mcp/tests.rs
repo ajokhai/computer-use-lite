@@ -153,6 +153,10 @@ fn initialize_negotiates_version_and_lists_tools() {
     }
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
+        // Every property has a plain type: strict clients (Gemini's function calling) reject anyOf.
+        for (k, v) in t["inputSchema"]["properties"].as_object().unwrap() {
+            assert!(v.get("type").is_some() && v.get("anyOf").is_none(), "{}.{k} needs a plain type", t["name"]);
+        }
         for req in t["inputSchema"]["required"].as_array().unwrap() {
             assert!(t["inputSchema"]["properties"].get(req.as_str().unwrap()).is_some(), "{} requires undeclared {req}", t["name"]);
         }
@@ -389,7 +393,7 @@ fn lessons_round_trip_through_the_tools() {
     assert!(text.starts_with("No lessons yet for x.com, mail"), "{text}");
     let (text, err, _) = call(&mut s, "remember", json!({"where": "x.com", "what": "Post clicked Next", "fix": "click the button labelled Post", "worked": true}));
     assert!(!err && text == "remembered for x.com (seen 1 time)", "{text}");
-    let (text, _, _) = call(&mut s, "recall", json!({"where": ["X.com"], "task": "post a tweet"}));
+    let (text, _, _) = call(&mut s, "recall", json!({"where": "notes, X.com", "task": "post a tweet"}));
     assert_eq!(text, "- On x.com: Post clicked Next → click the button labelled Post (worked)");
     let (_, err, _) = call(&mut s, "remember", json!({"what": "no fix"}));
     assert!(err);
