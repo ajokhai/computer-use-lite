@@ -1,5 +1,6 @@
 """The menu bar icon says whether an agent is working: this app's own, or another AI through cu-mcp."""
 
+import json
 import os
 import time
 import types
@@ -66,5 +67,20 @@ def test_escape_three_times_ends_the_working_state(tmp_path, monkeypatch):
     (tmp_path / "mcp.log").write_text("click_element ok\n")
     assert a.icon_state() == "working"
     (tmp_path / "stop-request").write_text(str(time.time() + 1))
+    a._mcp_checked = 0.0
+    assert a.icon_state() == "idle"
+
+
+def test_an_ai_app_counts_as_working_for_its_whole_task(tmp_path, monkeypatch):
+    monkeypatch.setattr(menubar, "AGENT_TASK", tmp_path / "agent-task")
+    monkeypatch.setattr(menubar, "STOP_REQUEST", tmp_path / "stop-request")
+    a = app(tmp_path, monkeypatch)
+    log = tmp_path / "mcp.log"
+    log.write_text("click_element ok\n")
+    thinking = time.time() - 200  # its last action was a while ago; it's thinking
+    os.utime(log, (thinking, thinking))
+    (tmp_path / "agent-task").write_text(json.dumps({"state": "working", "at": thinking}))
+    assert a.icon_state() == "working"
+    (tmp_path / "agent-task").write_text(json.dumps({"state": "done", "at": time.time()}))
     a._mcp_checked = 0.0
     assert a.icon_state() == "idle"

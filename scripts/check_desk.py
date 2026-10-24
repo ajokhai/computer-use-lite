@@ -89,7 +89,8 @@ CHECKS = {"closed": closed, "notes": notes, "reminders": reminders, "calendar": 
 EVENTS_NEAR = '''tell application "Calendar"
     set t to (current date) - 2 * days
     set n to 0
-    repeat with c in calendars
+    -- calendars made from other data: reminders with a due date show up again in Scheduled Reminders
+    repeat with c in (every calendar whose name is not "Scheduled Reminders" and name is not "Birthdays" and name is not "Siri Suggestions")
         set n to n + (count of (every event of c whose start date ≥ t and start date < t + 9 * days))
     end repeat
     return n

@@ -33,6 +33,11 @@ ICONS = {"idle": ("cursorarrow.rays", None, "Idle"),
          "listening": ("mic.fill", "systemRedColor", "Listening")}
 MCP_LOG = LOG.parent / "mcp.log"
 MCP_BUSY_SECS = 60  # an AI app thinks for tens of seconds between actions; it's still working
+# cu-mcp writes {"state": "working" | "done", "at": <epoch>} when an AI starts acting and when it says it's
+# finished, so the icon stays on for the whole task, thinking included. Without a "done", it gives up
+# after MCP_IDLE_SECS with no calls at all.
+AGENT_TASK = DATA / "agent-task"
+MCP_IDLE_SECS = 300
 
 # Pressing Escape three times stops any agent from anywhere. Escapes an agent types itself don't count.
 ESCAPE, ESCAPES_TO_STOP, ESCAPE_WINDOW = 53, 3, 1.5
@@ -185,9 +190,16 @@ class MenuBar(rumps.App):
             self._mcp_checked = now
             try:
                 last = MCP_LOG.stat().st_mtime
-                self._mcp_recent = time.time() - last < MCP_BUSY_SECS and not _stopped_since(last)
             except OSError:
-                self._mcp_recent = False
+                last = 0.0
+            task = _agent_task()
+            if task.get("state") == "done" and task.get("at", 0) >= last - 1:
+                busy = False  # the AI said it's finished, and hasn't acted since
+            elif task.get("state") == "working":
+                busy = time.time() - max(last, task.get("at", 0)) < MCP_IDLE_SECS
+            else:  # a cu-mcp that doesn't report tasks: going by its last call
+                busy = time.time() - last < MCP_BUSY_SECS
+            self._mcp_recent = busy and not _stopped_since(max(last, task.get("at", 0)))
         return self._mcp_recent
 
     def _icon_tick(self):
@@ -1182,6 +1194,14 @@ def _choose_zip():
         from pathlib import Path
         return Path(str(panel.URLs()[0].path()))
     return None
+
+
+def _agent_task() -> dict:
+    try:
+        import json
+        return json.loads(AGENT_TASK.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def _stopped_since(t: float) -> bool:
