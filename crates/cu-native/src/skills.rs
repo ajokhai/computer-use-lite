@@ -154,7 +154,11 @@ mod tests {
     use super::*;
 
     fn store() -> (Skills, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("cu-skills-{}-{}", std::process::id(), now()));
+        // A counter, not the clock: tests run in parallel and can start in the same microsecond.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("cu-skills-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         (Skills::new(dir.clone()), dir)
     }
 
