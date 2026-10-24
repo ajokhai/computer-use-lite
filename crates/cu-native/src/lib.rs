@@ -9,6 +9,7 @@ pub mod desktop;
 pub mod input;
 pub mod lessons;
 pub mod mcp;
+pub mod skills;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;

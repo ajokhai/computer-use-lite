@@ -17,7 +17,7 @@ pub fn default_dir() -> PathBuf {
     Path::new(&home).join("Library/Application Support/Computer Use")
 }
 
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
@@ -53,6 +53,25 @@ fn words(s: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Run `f` on the list stored in `<dir>/<name>.json` under the key `name` ({"version": 1, name: [...]}),
+/// holding an exclusive flock on `<name>.lock` as the Python side does, then write it back.
+/// A missing or unreadable file starts empty.
+pub(crate) fn with_list<T>(dir: &Path, name: &str, f: impl FnOnce(&mut Vec<Value>) -> T) -> Result<T, String> {
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let lock = File::create(dir.join(format!("{name}.lock"))).map_err(|e| e.to_string())?;
+    lock.lock().map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{name}.json"));
+    let mut data: Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
+    if !data.get(name).is_some_and(Value::is_array) {
+        data = json!({"version": 1, name: []});
+    }
+    let list = data.get_mut(name).and_then(Value::as_array_mut).expect("checked above");
+    let out = f(list);
+    let body = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    fs::write(&path, body).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 pub struct Store {
     dir: PathBuf,
 }
@@ -62,22 +81,8 @@ impl Store {
         Store { dir }
     }
 
-    /// Run `f` on the lessons with the file locked (exclusive flock on lessons.lock, as Python does),
-    /// then write them back. A missing or unreadable file starts empty.
     fn with_lessons<T>(&self, f: impl FnOnce(&mut Vec<Value>) -> T) -> Result<T, String> {
-        fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        let lock = File::create(self.dir.join("lessons.lock")).map_err(|e| e.to_string())?;
-        lock.lock().map_err(|e| e.to_string())?;
-        let path = self.dir.join("lessons.json");
-        let mut data: Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
-        if !data.get("lessons").is_some_and(Value::is_array) {
-            data = json!({"version": 1, "lessons": []});
-        }
-        let lessons = data.get_mut("lessons").and_then(Value::as_array_mut).expect("checked above");
-        let out = f(lessons);
-        let body = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-        fs::write(&path, body).map_err(|e| e.to_string())?;
-        Ok(out)
+        with_list(&self.dir, "lessons", f)
     }
 
     /// Save a lesson, merged with the same fix for the same place. Returns how often it's been seen.

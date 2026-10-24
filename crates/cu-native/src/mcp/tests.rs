@@ -148,7 +148,7 @@ fn initialize_negotiates_version_and_lists_tools() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     for want in ["take_screenshot", "list_screen_elements", "click_element", "click_at", "type_text", "press_keys",
                  "scroll", "drag", "move_mouse", "open_app", "open_url", "select_menu", "read_element",
-                 "list_windows", "wait_for_change", "speak", "computer_task", "check_permissions", "recall", "remember"] {
+                 "list_windows", "wait_for_change", "speak", "computer_task", "check_permissions", "recall", "remember", "skills", "save_skill"] {
         assert!(names.contains(&want), "missing {want}");
     }
     for t in tools {
@@ -392,5 +392,18 @@ fn lessons_round_trip_through_the_tools() {
     let (text, _, _) = call(&mut s, "recall", json!({"where": ["X.com"], "task": "post a tweet"}));
     assert_eq!(text, "- On x.com: Post clicked Next → click the button labelled Post (worked)");
     let (_, err, _) = call(&mut s, "remember", json!({"what": "no fix"}));
+    assert!(err);
+}
+
+#[test]
+fn skills_round_trip_through_the_tools() {
+    let mut s = server();
+    let (text, _, _) = call(&mut s, "skills", json!({"task": "post a tweet"}));
+    assert!(text.starts_with("No skills match"), "{text}");
+    let (text, err, _) = call(&mut s, "save_skill", json!({"name": "Post on X", "where": "x.com", "steps": ["Click the compose box", "Type", "Click Post"]}));
+    assert!(!err && text == "saved skill \"Post on X\" for x.com", "{text}");
+    let (text, _, _) = call(&mut s, "skills", json!({"task": "post on x", "where": "x.com"}));
+    assert!(text.starts_with("Skill \"Post on X\" (x.com):\n  1. Click the compose box"), "{text}");
+    let (_, err, _) = call(&mut s, "save_skill", json!({"name": "Empty", "steps": []}));
     assert!(err);
 }

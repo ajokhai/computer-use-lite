@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::decision::truncate_chars;
 use crate::desktop::{Button, Desktop};
 use crate::lessons::{self, Store};
+use crate::skills::Skills;
 use crate::NativeElement;
 
 pub const SERVER_NAME: &str = "computer-use-lite";
@@ -25,7 +26,7 @@ Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over 
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
 Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the mouse is in a screen corner, the user pressed the emergency stop: stop and ask.
 Use speak() for short spoken updates when the user may be listening rather than watching.
-Call recall at the start of a task. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember.";
+Call recall at the start of a task, and skills before a multi-step one. When a step fails, look again (list or screenshot), try a different way, and once something works, call remember (and save_skill for a reusable multi-step way).";
 
 /// Tools that change something on screen; all refused while the emergency stop is active.
 const ACTING: &[&str] = &[
@@ -44,6 +45,7 @@ pub struct Server<D: Desktop> {
     ox: f64,
     oy: f64,
     lessons: Store,
+    skills: Skills,
 }
 
 /// A tool's outcome: content blocks, and whether it failed.
@@ -189,13 +191,25 @@ impl<D: Desktop> Server<D> {
         let (w, _) = desk.main_display();
         let scale = if w > DEFAULT_SHOT_WIDTH as f64 { w / DEFAULT_SHOT_WIDTH as f64 } else { 1.0 };
         Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
-                 lessons: Store::new(lessons::default_dir()) }
+                 lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()) }
     }
 
     /// Keep lessons somewhere else (tests).
     pub fn with_lessons_dir(mut self, dir: std::path::PathBuf) -> Self {
-        self.lessons = Store::new(dir);
+        self.lessons = Store::new(dir.clone());
+        self.skills = Skills::new(dir);
         self
+    }
+
+    /// The places a call is about: the given app/site name(s) plus the frontmost app.
+    fn places(&self, args: &Value) -> Vec<String> {
+        let mut places: Vec<String> = match args.get("where") {
+            Some(Value::String(w)) => vec![w.clone()],
+            Some(Value::Array(ws)) => ws.iter().filter_map(Value::as_str).map(String::from).collect(),
+            _ => Vec::new(),
+        };
+        places.push(self.desk.frontmost());
+        places
     }
 
     pub fn desktop(&self) -> &D {
@@ -308,6 +322,17 @@ impl<D: Desktop> Server<D> {
                                      "fix": {"type": "string", "description": "What worked, or what to try instead."},
                                      "worked": {"type": "boolean", "description": "True once the fix is confirmed."},
                                      "task": {"type": "string"}}), &["what", "fix"])},
+            {"name": "skills", "description": "Step-by-step skills for this app or site that worked before. Check before starting a multi-step task.",
+             "inputSchema": s(json!({"task": {"type": "string", "description": "What you're about to do."},
+                                     "where": {"description": "App name or site, or a list; the frontmost app is always included.",
+                                               "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                                     "limit": {"type": "integer", "description": "Default 2, max 5."}}), &["task"])},
+            {"name": "save_skill", "description": "Save a reusable, step-by-step way of doing something in an app or site, once it has worked, so later runs (any AI) can follow it.",
+             "inputSchema": s(json!({"name": {"type": "string", "description": "Short, e.g. \"Post on X\"."},
+                                     "where": {"type": "string", "description": "App name or site, e.g. \"x.com\" (default: the frontmost app)."},
+                                     "steps": {"type": "array", "items": {"type": "string"}, "description": "One action per step, at most 20."},
+                                     "when": {"type": "string", "description": "When to use it."},
+                                     "notes": {"type": "array", "items": {"type": "string"}}}), &["name", "steps"])},
             {"name": "check_permissions", "description": "Whether this server can read the screen (Screen Recording) and control apps (Accessibility), and what's frontmost.",
              "inputSchema": s(json!({}), &[])},
         ])
@@ -511,13 +536,28 @@ impl<D: Desktop> Server<D> {
                     Err(e) => Reply::error(e),
                 })
             }
-            "recall" => {
-                let mut places: Vec<String> = match args.get("where") {
-                    Some(Value::String(w)) => vec![w.clone()],
-                    Some(Value::Array(ws)) => ws.iter().filter_map(Value::as_str).map(String::from).collect(),
-                    _ => Vec::new(),
+            "skills" => {
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(2) as usize;
+                let found = self.skills.find(req_str(args, "task")?, &self.places(args), limit)?;
+                Ok(Reply::text(if found.is_empty() {
+                    "No skills match. If you work out a reusable way, call save_skill.".to_string()
+                } else {
+                    found.join("\n\n")
+                }))
+            }
+            "save_skill" => {
+                let list = |k: &str| -> Vec<String> {
+                    args.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(String::from).collect()
                 };
-                places.push(self.desk.frontmost());
+                let front = self.desk.frontmost();
+                let place = arg_str(args, "where").unwrap_or(&front).to_string();
+                Ok(match self.skills.save(req_str(args, "name")?, &place, arg_str(args, "when").unwrap_or(""), &list("steps"), &list("notes")) {
+                    Ok(msg) => Reply::text(msg),
+                    Err(e) => Reply::error(e),
+                })
+            }
+            "recall" => {
+                let places = self.places(args);
                 let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(6) as usize;
                 let found = self.lessons.recall(&places, arg_str(args, "task").unwrap_or(""), limit)?;
                 Ok(Reply::text(if found.is_empty() {
