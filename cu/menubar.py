@@ -16,7 +16,7 @@ from AppKit import (
     NSWorkspace,
 )
 
-from . import __version__, integration, say, updater, usage, voicepack
+from . import __version__, integration, onboarding, say, updater, usage, voicepack
 from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
 from .shortcut import PRESETS, Detector, Shortcut
 from .logger import CRASH_LOG, rotate, setup_logging
@@ -45,6 +45,7 @@ class MenuBar(rumps.App):
         self.last._menuitem.setHidden_(True)  # shown once a task has finished
         self.stop_item = rumps.MenuItem("Stop", callback=None, key=".")
         self.ask = rumps.MenuItem("Ask Computer Use…", callback=lambda _: self.open_bar())
+        self.setup_item = rumps.MenuItem("Finish Setting Up…", callback=lambda _: self.show_setup())
 
         self.modes = {
             "auto": rumps.MenuItem("Auto: Best Available", callback=lambda _: self.set_mode("auto")),
@@ -98,8 +99,7 @@ class MenuBar(rumps.App):
             self.shortcut_menu,
             self.login,
             None,
-            rumps.MenuItem("Allow Accessibility…", callback=lambda _: integration.open_privacy_settings("Accessibility")),
-            rumps.MenuItem("Allow Screen Recording…", callback=lambda _: integration.open_privacy_settings("ScreenCapture")),
+            rumps.MenuItem("Set Up Permissions…", callback=lambda _: self.show_setup()),
             None,
             self.update_item,
             self.auto_update_item,
@@ -111,7 +111,7 @@ class MenuBar(rumps.App):
         ])
 
         self.menu = [
-            self.status, self.last, self.stop_item, None,
+            self.setup_item, self.status, self.last, self.stop_item, None,
             self.ask, None,
             mode_menu, voice_menu, self.usage_menu, None,
             working_menu, connect_menu, settings_menu, None,
@@ -133,6 +133,8 @@ class MenuBar(rumps.App):
         NSApplication.sharedApplication().setActivationPolicy_(1)  # menu bar only, no Dock icon
         self.set_icon(IDLE_ICON)
         self._install_hotkey()
+        if not self.settings.get("onboarded") or onboarding.missing_required():
+            self.show_setup()
         if self.settings["hands_free"]:
             self.ensure_voice(self._listen)
 
@@ -157,6 +159,7 @@ class MenuBar(rumps.App):
             item.state = self.settings[key]
         self.auto_update_item.state = self.settings["auto_update"]
         self.ask.title = f"Ask Computer Use…   {self.shortcut().label}"
+        self.setup_item._menuitem.setHidden_(not onboarding.missing_required())
         self.stop_item.set_callback(self.stop if self.agent is not None else None)
         bundled = integration.app_bundle() is not None
         self.login.state = integration.login_enabled()
@@ -406,6 +409,9 @@ class MenuBar(rumps.App):
                 pass
         save_settings(self.settings)
         self.refresh_usage()
+
+    def show_setup(self):
+        onboarding.show(self)
 
     # --- the shortcut ----------------------------------------------------------
 
