@@ -17,7 +17,7 @@ from AppKit import (
     NSWorkspace,
 )
 
-from . import __version__, integration, onboarding, say, updater, usage, voicepack
+from . import __version__, integration, onboarding, replies, say, updater, usage, voicepack
 from .config import LOG, load_keys, load_settings, save_settings
 from .shortcut import PRESETS, Detector, Shortcut
 from .logger import CRASH_LOG, rotate, setup_logging
@@ -861,7 +861,7 @@ class MenuBar(rumps.App):
             self.stop(None)
             self.say("Okay, switching.")
             return
-        self.say("On it.")
+        self.say(replies.ack(command))
         if listening and self.prompt_bar.is_visible():
             self.prompt_bar.set_listening(False)
             self.prompt_bar.show_transcript(command, final=True)  # shows it, then sends via start()
@@ -1075,7 +1075,7 @@ class MenuBar(rumps.App):
                 if self.update_ready:
                     self.finish_update()
                 if self.voice_task:
-                    self.say(_spoken(payload))
+                    self.say(replies.result(payload, self.last_task))
                     self.voice_task = False
                 rumps.notification("Computer Use", "Task finished", payload)
 
@@ -1101,11 +1101,6 @@ def _choose_zip():
         return Path(str(panel.URLs()[0].path()))
     return None
 
-
-def _spoken(result: str) -> str:
-    """'done (jev p=0.91)' -> 'Done.'"""
-    text = re.sub(r"\s*\([^)]*\)", "", result).strip(" .")
-    return (text[:1].upper() + text[1:] + ".") if text else "Done."
 
 
 def _short(s: str, n: int = 40) -> str:

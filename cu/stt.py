@@ -15,13 +15,14 @@ from pathlib import Path
 
 import numpy as np
 
+from .replies import pause_for
 from .voicepack import label, parse
 
 RATE = 16_000
 BLOCK = 512  # 32 ms
-END_SILENCE = 0.75  # seconds of quiet that end an utterance
+END_SILENCE = 1.8  # seconds of quiet that end an utterance (doubled while the words sound unfinished)
 PARTIAL_EVERY = 0.6
-MAX_UTTERANCE = 30.0
+MAX_UTTERANCE = 60.0
 
 _models: dict = {}
 _load_lock = threading.Lock()
@@ -140,7 +141,7 @@ class LocalListener:
                 self._close()
                 return
         noise, speech, voiced = 0.01, [], False
-        quiet_since, last_partial, started = None, 0.0, None
+        quiet_since, last_partial, started, heard = None, 0.0, None, ""
         while self.listening:
             try:
                 block = self._audio.get(timeout=0.2)
@@ -163,8 +164,9 @@ class LocalListener:
                 last_partial = now
                 text = transcribe(self.engine, np.concatenate(speech))
                 if text:
+                    heard = text
                     self.events.put(("partial", text))
-            if self._end or (quiet_since and now - quiet_since > END_SILENCE) or now - started > MAX_UTTERANCE:
+            if self._end or (quiet_since and now - quiet_since > pause_for(heard, END_SILENCE)) or now - started > MAX_UTTERANCE:
                 text = transcribe(self.engine, np.concatenate(speech))
                 self._close()
                 self.events.put(("final", text))

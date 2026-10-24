@@ -1,7 +1,8 @@
 """Voice input with Apple's on-device speech recognition (no API key, audio never leaves the Mac). Spoken output lives in say.py.
 
 Listener streams microphone audio into SFSpeechRecognizer, reports partial transcripts as you speak,
-and ends an utterance after a short silence. Recognition callbacks arrive on background threads;
+and ends an utterance once the microphone has gone quiet (not just when the words stop changing: the
+recognizer can lag a second or more behind someone who's still talking). Recognition callbacks arrive on background threads;
 callers get them through `events` and call `tick()` from their main loop."""
 
 import queue
@@ -9,10 +10,13 @@ import threading
 import time
 
 import AVFoundation
+import numpy as np
 import Speech
 from Foundation import NSLocale
 
-SILENCE_SECS = 1.2  # pause that ends an utterance
+from .replies import pause_for
+
+SILENCE_SECS = 1.8  # quiet that ends an utterance (doubled while the words sound unfinished)
 WAKE_WORDS = ("hey computer", "computer")
 STOP_WORDS = {"stop", "cancel", "stop it", "abort", "halt", "never mind", "nevermind"}
 
@@ -39,6 +43,8 @@ class Listener:
         self._task = None
         self._text = ""
         self._changed = 0.0
+        self._voiced = 0.0  # last time the mic heard someone talking
+        self._noise = 0.01  # the room's background level
         self._lock = threading.Lock()
 
     def start(self):
@@ -54,7 +60,7 @@ class Listener:
         node = self.engine.inputNode()
         fmt = node.outputFormatForBus_(0)
         node.removeTapOnBus_(0)
-        node.installTapOnBus_bufferSize_format_block_(0, 1024, fmt, lambda buf, when: req.appendAudioPCMBuffer_(buf))
+        node.installTapOnBus_bufferSize_format_block_(0, 1024, fmt, lambda buf, when: self._on_audio(req, buf))
         self.engine.prepare()
         ok, err = self.engine.startAndReturnError_(None)
         if not ok:
@@ -63,8 +69,21 @@ class Listener:
             return
         with self._lock:
             self._request, self._text, self._changed = req, "", time.monotonic()
+            self._voiced = self._changed
         self._task = self.recognizer.recognitionTaskWithRequest_resultHandler_(req, self._on_result)
         self.listening = True
+
+    def _on_audio(self, req, buf):
+        req.appendAudioPCMBuffer_(buf)
+        try:
+            n = int(buf.frameLength())
+            level = float(np.sqrt(np.mean(np.frombuffer(buf.floatChannelData()[0].as_buffer(n), dtype=np.float32) ** 2)))
+        except Exception:
+            return  # no level: fall back to the words changing
+        if level > max(0.01, self._noise * 3.0):
+            self._voiced = time.monotonic()
+        else:
+            self._noise = 0.95 * self._noise + 0.05 * level
 
     def _on_result(self, result, error):
         if result is not None:
@@ -85,7 +104,8 @@ class Listener:
     def tick(self):
         """Call regularly from the main loop: ends the utterance after a pause."""
         with self._lock:
-            done = self.listening and self._text and time.monotonic() - self._changed > SILENCE_SECS
+            quiet = time.monotonic() - max(self._changed, self._voiced)
+            done = self.listening and self._text and quiet > pause_for(self._text, SILENCE_SECS)
         if done:
             self._finish()
 
