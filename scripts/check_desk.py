@@ -32,7 +32,8 @@ def osa(script: str, timeout: int = 180) -> str:
 
 def notes(stamp: str) -> tuple[bool, str]:
     body = osa(f'tell application "Notes" to get body of every note whose name contains "CU Bench {stamp}"').lower()
-    ok = not body.startswith("error") and all(w in body for w in ("milk", "eggs", "bread", "69104"))
+    digits = body.replace(",", "").replace("\u202f", "").replace(" ", "")  # 69,104 is the right answer too
+    ok = not body.startswith("error") and all(w in body for w in ("milk", "eggs", "bread")) and "69104" in digits
     return ok, " ".join(body.replace("<div>", " ").replace("</div>", " ").split())[:120] or "no such note"
 
 

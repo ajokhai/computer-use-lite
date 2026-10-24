@@ -147,6 +147,7 @@ Live runs on a real Mac (October 2026), checked by hand or by script, not by the
 | Model | How | Make (6 parts) | Clean up | Time |
 |---|---|---|---|---|
 | Claude Opus 5.5 | through `cu-mcp`, no API key | 6/6 | 2/2: everything it made is gone, and nothing else (the check also flagged 24 screenshots the owner deleted by hand meanwhile) | 5 min to make |
+| Gemini 3.8 Flash | Antigravity's signed-in agent through `cu-mcp`, no API key | 3/6 (Notes, Reminders, Calendar) | No time left | Timed out at 10 min (103 calls, on the save dialog). A first try timed out with 1/6 while Antigravity waited for someone to allow a tool. |
 | Jev | the app's agent, Jev Only | 0/6 | Not run: Jev can't see which reminder or event it would delete, and these were the owner's real calendars. The checker deleted its items. | 75 s, 3 attempts, then stuck |
 
 More models are on the way.
@@ -164,7 +165,7 @@ Each run's surprises became a fix in the code or a lesson in memory, so the next
 - **The working icon** turned black instead of orange and switched off while an AI was thinking. Fixed: it's drawn in color and stays on for the whole task.
 - **The cleanup check flagged files leaving the Desktop** that weren't part of the test. The owner had deleted them by hand mid-run, and the check can't yet tell a person's changes from the agent's. Next: the app records real clicks and keys while an agent works (they're distinguishable from the agent's), and the check uses that.
 - **Jev alone can't do a multi-app task like this yet.** It jumped ahead to Calendar, gave the event the wrong time, and typed text from several steps into one note. Its retry advice also told it to try a compose URL, which only makes sense in a browser; for apps it now suggests the app's shortcut or menu. Jev works best paired with a vision model.
-- **The checker had bugs too:** deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now counts both correctly.
+- **The checker had bugs too:** it wanted 69104 and rejected Gemini's correct "69,104"; deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now counts both correctly.
 
 ## Ports
 Computer Use is macOS only for now. Help with a port is welcome: see the draft pull requests for [Linux](https://github.com/ajokhai/computer-use-lite/pull/1) and [Windows](https://github.com/ajokhai/computer-use-lite/pull/2). Each one links a guide to what needs replacing.
