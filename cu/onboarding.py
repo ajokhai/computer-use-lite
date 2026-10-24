@@ -7,28 +7,15 @@ Settings › Set Up Permissions…."""
 import subprocess
 
 import objc
-from AppKit import (
-    NSApplication,
-    NSBox,
-    NSButton,
-    NSColor,
-    NSFont,
-    NSImage,
-    NSImageSymbolConfiguration,
-    NSImageView,
-    NSMakeRect,
-    NSPanel,
-    NSTextField,
-    NSWindowStyleMaskClosable,
-    NSWindowStyleMaskTitled,
-)
+from AppKit import NSApplication, NSColor, NSMakeRect
 from Foundation import NSObject, NSTimer
 
-from . import integration
+from . import integration, ui
 
-WIDTH = 540.0
-ROW_H = 64.0
 PAD = 24.0
+CARD_W, CARD_H = 262.0, 150.0
+WIDTH = 2 * PAD + 2 * CARD_W + ui.GAP
+NEXT_H = 112.0
 
 # status values
 GRANTED, MISSING, ASKED = "granted", "missing", "asked"
@@ -119,21 +106,6 @@ def missing_required() -> list[str]:
     return out
 
 
-def _symbol(name: str, color) -> tuple:
-    """(image, tint) for a status icon."""
-    img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
-    img = img.imageWithSymbolConfiguration_(NSImageSymbolConfiguration.configurationWithPointSize_weight_(20, 0.0))
-    return img, color
-
-
-def _label(text: str, size: float, color, weight: float = 0.0) -> NSTextField:
-    f = NSTextField.wrappingLabelWithString_(text)
-    f.setFont_(NSFont.systemFontOfSize_weight_(size, weight))
-    f.setTextColor_(color)
-    f.setSelectable_(False)
-    return f
-
-
 class Onboarding(NSObject):
     def initWithApp_(self, app):
         self = objc.super(Onboarding, self).init()
@@ -154,85 +126,55 @@ class Onboarding(NSObject):
 
     @objc.python_method
     def _build(self):
-        height = 150 + ROW_H * len(PERMISSIONS) + 130
-        self.panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, WIDTH, height), NSWindowStyleMaskTitled | NSWindowStyleMaskClosable, 2, False)
-        self.panel.setTitle_("Set Up Computer Use")
-        self.panel.setReleasedWhenClosed_(False)
+        grid_h = 2 * CARD_H + ui.GAP
+        height = 132 + grid_h + ui.GAP + NEXT_H + 76
+        self.panel = ui.window("Set Up Computer Use", WIDTH, height)
         self.panel.setDelegate_(self)
         content = self.panel.contentView()
-        y = height - PAD
+        y = ui.header(content, "Let’s get Computer Use ready",
+                      "macOS asks you to allow a few things before an app can use your Mac for you. "
+                      "Click Allow on each; its card turns to Allowed as soon as it’s on.", PAD, WIDTH, height)
 
-        title = _label("Let’s get Computer Use ready", 20, NSColor.labelColor(), 0.3)
-        title.setFrame_(NSMakeRect(PAD, y - 26, WIDTH - 2 * PAD, 26))
-        content.addSubview_(title)
-        y -= 34
-        intro = _label("macOS asks you to allow a few things before an app can use your Mac for you. "
-                       "Click Allow on each one; its row turns green as soon as it’s on.",
-                       13, NSColor.secondaryLabelColor())
-        intro.setFrame_(NSMakeRect(PAD, y - 36, WIDTH - 2 * PAD, 36))
-        content.addSubview_(intro)
-        y -= 56
+        for i, (key, name, required, desc, _check, _ask) in enumerate(PERMISSIONS):
+            col, line = i % 2, i // 2
+            frame = NSMakeRect(PAD + col * (CARD_W + ui.GAP), y - (line + 1) * CARD_H - line * ui.GAP, CARD_W, CARD_H)
+            self.rows[key] = self._card(content, frame, name, required, desc, key)
 
-        for key, name, required, desc, _check, _ask in PERMISSIONS:
-            y -= ROW_H
-            self.rows[key] = self._row(content, y, name, required, desc, key)
-
-        y -= 14
-        sep = NSBox.alloc().initWithFrame_(NSMakeRect(PAD, y, WIDTH - 2 * PAD, 1))
-        sep.setBoxType_(2)  # separator
-        content.addSubview_(sep)
-        y -= 12
-        nxt = _label("Optional next steps", 13, NSColor.labelColor(), 0.3)
-        nxt.setFrame_(NSMakeRect(PAD, y - 18, WIDTH - 2 * PAD, 18))
+        nxt = ui.card(NSMakeRect(PAD, 76, WIDTH - 2 * PAD, NEXT_H))
         content.addSubview_(nxt)
-        y -= 22
-        tips = _label("No API key needed: use Connect AI Apps in the menu, and the AI you're signed into in "
-                      "Claude, Antigravity, VS Code or Cursor drives your Mac (that app needs Accessibility and "
-                      "Screen Recording too). Or add a model key to use the bar's built-in agent.",
-                      12, NSColor.secondaryLabelColor())
-        tips.setFrame_(NSMakeRect(PAD, y - 46, WIDTH - 2 * PAD, 46))
-        content.addSubview_(tips)
+        v, w = nxt.contentView(), WIDTH - 2 * PAD
+        self.keys = ui.capsule_button("Add a Model Key…", self, "keysClicked:")
+        ui.place(v, ui.label("No API key needed", 15, weight=0.4), 18, NEXT_H - 36)
+        p = ui.pill("Next Step", NSColor.controlAccentColor())
+        ui.place(v, p, w - 18 - p.frame().size.width, NEXT_H - 34, p.frame().size.width, p.frame().size.height)
+        ui.place(v, ui.label("Connect AI Apps in the menu lets the AI you're signed into (Claude, Cursor, "
+                             "VS Code…) drive your Mac; it needs these permissions too. Or add a key for the "
+                             "bar's own agent.", 12, NSColor.secondaryLabelColor(), wrap=True),
+                 18, 14, w - 36 - self.keys.frame().size.width - 16, 56)
+        ui.place(v, self.keys, w - 18 - self.keys.frame().size.width, 18, self.keys.frame().size.width, 30)
 
-        self.done = NSButton.buttonWithTitle_target_action_("Done", self, "doneClicked:")
+        self.done = ui.capsule_button("Finish Later", self, "doneClicked:", primary=True)
         self.done.setKeyEquivalent_("\r")
-        self.keys = NSButton.buttonWithTitle_target_action_("Add a Model Key…", self, "keysClicked:")
-        self.relaunch = NSButton.buttonWithTitle_target_action_("Relaunch Computer Use", self, "relaunchClicked:")
-        for b in (self.done, self.keys, self.relaunch):
-            b.sizeToFit()
-            content.addSubview_(b)
-        dw = max(self.done.frame().size.width, 96)
-        self.done.setFrame_(NSMakeRect(WIDTH - PAD - dw, 18, dw, 32))
-        self.keys.setFrame_(NSMakeRect(PAD, 18, self.keys.frame().size.width, 32))
-        rw = self.relaunch.frame().size.width
-        self.relaunch.setFrame_(NSMakeRect(WIDTH - PAD - dw - 12 - rw, 18, rw, 32))
+        dw = self.done.frame().size.width
+        ui.place(content, self.done, WIDTH - PAD - dw, 24, dw, 30)
+        self.relaunch = ui.capsule_button("Relaunch Computer Use", self, "relaunchClicked:")
         self.relaunch.setToolTip_("macOS applies Screen Recording after the app reopens")
+        rw = self.relaunch.frame().size.width
+        ui.place(content, self.relaunch, WIDTH - PAD - dw - 12 - rw, 24, rw, 30)
         self.refresh()
 
     @objc.python_method
-    def _row(self, content, y, name, required, desc, key):
-        icon = NSImageView.alloc().initWithFrame_(NSMakeRect(PAD, y + ROW_H / 2 - 13, 26, 26))
-        content.addSubview_(icon)
-        x = PAD + 38
-        head = _label(name, 13, NSColor.labelColor(), 0.3)
-        head.sizeToFit()
-        head.setFrame_(NSMakeRect(x, y + ROW_H - 26, head.frame().size.width, 18))
-        content.addSubview_(head)
-        tag = _label("Required" if required else "Optional", 11,
-                     NSColor.systemOrangeColor() if required else NSColor.tertiaryLabelColor(), 0.23)
-        tag.sizeToFit()
-        tag.setFrame_(NSMakeRect(x + head.frame().size.width + 8, y + ROW_H - 25, tag.frame().size.width, 16))
-        content.addSubview_(tag)
-        button = NSButton.buttonWithTitle_target_action_("Allow…", self, "allowClicked:")
+    def _card(self, content, frame, name, required, desc, key):
+        c = ui.card(frame)
+        content.addSubview_(c)
+        v, pad = c.contentView(), 18.0
+        ui.place(v, ui.label(name, 15, weight=0.4), pad, CARD_H - 36)
+        detail = ui.place(v, ui.label(desc, 12, NSColor.secondaryLabelColor(), wrap=True), pad, 54, CARD_W - 2 * pad, 48)
+        button = ui.capsule_button("Allow", self, "allowClicked:", primary=True)
         button.setIdentifier_(key)
-        button.sizeToFit()
-        bw = max(button.frame().size.width, 84)
-        button.setFrame_(NSMakeRect(WIDTH - PAD - bw, y + ROW_H / 2 - 16, bw, 32))
-        content.addSubview_(button)
-        detail = _label(desc, 12, NSColor.secondaryLabelColor())
-        detail.setFrame_(NSMakeRect(x, y + 6, WIDTH - x - PAD - bw - 12, 32))
-        content.addSubview_(detail)
-        return {"icon": icon, "button": button, "required": required, "detail": detail, "desc": desc}
+        ui.place(v, button, CARD_W - pad - button.frame().size.width, 18, button.frame().size.width, 30)
+        return {"view": v, "pill": None, "state": None, "button": button, "required": required,
+                "detail": detail, "desc": desc}
 
     # --- status ----------------------------------------------------------------
 
@@ -245,21 +187,22 @@ class Onboarding(NSObject):
             except Exception:
                 ok = False
             row = self.rows[key]
-            if ok:
-                img, color = _symbol("checkmark.circle.fill", NSColor.systemGreenColor())
-            elif required:
-                img, color = _symbol("exclamationmark.circle.fill", NSColor.systemOrangeColor())
-            else:
-                img, color = _symbol("circle", NSColor.tertiaryLabelColor())
-            row["icon"].setImage_(img)
-            row["icon"].setContentTintColor_(color)
+            state = ("Allowed", NSColor.systemGreenColor()) if ok else \
+                ("Needed", NSColor.systemOrangeColor()) if required else ("Optional", NSColor.tertiaryLabelColor())
+            if state[0] != row["state"]:  # rebuild the pill only when it changes (this runs every second)
+                row["pill"] = ui.swap_pill(row["view"], row["pill"], *state, CARD_W - 18, CARD_H - 34)
+                row["state"] = state[0]
             row["button"].setHidden_(ok)
             all_required &= ok or not required
         # Screen Recording only takes effect after a relaunch, so offer one once it's been asked for.
         screen_ok = self.rows["screen"]["button"].isHidden()
         self.relaunch.setHidden_(screen_ok or not self.asked_screen or integration.app_bundle() is None)
-        self.done.setTitle_("Done" if all_required else "Finish Later")
-        # Still off after asking: most likely a leftover entry from an older build. Say so in its row.
+        title = "Done" if all_required else "Finish Later"
+        if str(self.done.title()) != title:
+            ui.retitle(self.done, title)
+            f, r = self.done.frame(), self.relaunch.frame()  # keep Relaunch just left of Done
+            self.relaunch.setFrameOrigin_((f.origin.x - 12 - r.size.width, r.origin.y))
+        # Still off after asking: most likely a leftover entry from an older build. Say so in its card.
         ax = self.rows["accessibility"]
         stale = not ax["button"].isHidden() and self.asked_ax > 0
         ax["detail"].setStringValue_(AX_STALE_HINT if stale else ax["desc"])

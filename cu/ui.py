@@ -133,3 +133,57 @@ def capsule_button(title: str, target, action: str, primary: bool = False, on_da
         title, {NSForegroundColorAttributeName: color, NSFontAttributeName: b.font()}))
     return b
 
+
+
+def window(title: str, width: float, height: float, closable: bool = True):
+    """A panel in the app's look: transparent title bar, soft grey background, content to the top edge."""
+    from AppKit import (NSPanel, NSWindowStyleMaskClosable, NSWindowStyleMaskFullSizeContentView,
+                        NSWindowStyleMaskTitled)
+    mask = NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView | (NSWindowStyleMaskClosable if closable else 0)
+    panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(NSMakeRect(0, 0, width, height), mask, 2, False)
+    panel.setTitle_(title)  # for the Window menu and accessibility; hidden in the bar
+    panel.setTitlebarAppearsTransparent_(True)
+    panel.setTitleVisibility_(1)
+    panel.setBackgroundColor_(BACKGROUND)
+    panel.setReleasedWhenClosed_(False)
+    return panel
+
+
+def header(content, title: str, intro: str, pad: float, width: float, top: float) -> float:
+    """The big bold title and its grey intro under the title bar; returns the y below them."""
+    place(content, label(title, 24, weight=0.4), pad, top - 72)
+    if not intro:
+        return top - 84
+    lines = label(intro, 13, NSColor.secondaryLabelColor(), wrap=True)
+    place(content, lines, pad, top - 116, width - 2 * pad, 36)
+    return top - 132
+
+
+def retitle(button: NSButton, title: str, keep_right: bool = True):
+    """Change a capsule button's title and width, keeping its right edge (or left) in place."""
+    color = button.attributedTitle().attribute_atIndex_effectiveRange_(NSForegroundColorAttributeName, 0, None)[0] \
+        if button.attributedTitle().length() else NSColor.labelColor()
+    button.setAttributedTitle_(NSAttributedString.alloc().initWithString_attributes_(
+        title, {NSForegroundColorAttributeName: color, NSFontAttributeName: button.font()}))
+    f = button.frame()
+    probe = NSButton.buttonWithTitle_target_action_(title, None, None)
+    probe.setBordered_(False)
+    probe.setFont_(button.font())
+    probe.sizeToFit()
+    w = max(probe.frame().size.width + 28, 76)
+    x = f.origin.x + f.size.width - w if keep_right else f.origin.x
+    button.setFrame_(NSMakeRect(x, f.origin.y, w, f.size.height))
+
+
+def enable(button: NSButton, on: bool):
+    button.setEnabled_(on)
+    button.setAlphaValue_(1.0 if on else 0.4)
+
+
+def swap_pill(parent, old, text: str, tint: NSColor, right: float, y: float):
+    """Replace a pill in place (right-aligned at `right`); returns the new one."""
+    if old is not None:
+        old.removeFromSuperview()
+    p = pill(text, tint)
+    w = p.frame().size.width
+    return place(parent, p, right - w, y, w, p.frame().size.height)

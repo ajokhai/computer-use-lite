@@ -6,34 +6,20 @@ import time
 import objc
 from AppKit import (
     NSApplication,
-    NSBox,
-    NSButton,
     NSColor,
     NSEvent,
     NSEventMaskFlagsChanged,
     NSEventMaskKeyDown,
-    NSFont,
     NSMakeRect,
-    NSPanel,
-    NSTextField,
-    NSWindowStyleMaskClosable,
-    NSWindowStyleMaskTitled,
 )
 from Foundation import NSObject
 
+from . import ui
 from .shortcut import CHORD_MODS, DOUBLE_TAP_WINDOW, FN, MAX_TAP, SYMBOL, Shortcut
 
-WIDTH, HEIGHT = 420.0, 220.0
-_BOX_CUSTOM = 4
+WIDTH, HEIGHT = 440.0, 330.0
+PAD = 24.0
 _RETURN, _ESCAPE = 36, 53
-
-
-def _label(text: str, size: float, color, weight: float = 0.0, align: int = 0) -> NSTextField:
-    f = NSTextField.labelWithString_(text)
-    f.setFont_(NSFont.systemFontOfSize_weight_(size, weight))
-    f.setTextColor_(color)
-    f.setAlignment_(align)
-    return f
 
 
 class ShortcutRecorder(NSObject):
@@ -56,49 +42,32 @@ class ShortcutRecorder(NSObject):
 
     @objc.python_method
     def _build(self, current: Shortcut):
-        self.panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, WIDTH, HEIGHT), NSWindowStyleMaskTitled | NSWindowStyleMaskClosable, 2, False)
-        self.panel.setTitle_("Computer Use Shortcut")
+        self.panel = ui.window("Computer Use Shortcut", WIDTH, HEIGHT)
         self.panel.setDelegate_(self)
-        self.panel.setReleasedWhenClosed_(False)
         content = self.panel.contentView()
-        pad = 20.0
+        y = ui.header(content, "Shortcut", "Press the shortcut you want, or double-tap a modifier key.",
+                      PAD, WIDTH, HEIGHT) + 22
 
-        intro = _label("Press the shortcut you want, or double-tap a modifier key.", 13, NSColor.labelColor())
-        intro.setFrame_(NSMakeRect(pad, HEIGHT - 50, WIDTH - 2 * pad, 34))
-        intro.setLineBreakMode_(0)  # wrap
-        intro.setMaximumNumberOfLines_(2)
-        content.addSubview_(intro)
-
-        self.box = NSBox.alloc().initWithFrame_(NSMakeRect(pad, 78, WIDTH - 2 * pad, 64))
-        self.box.setBoxType_(_BOX_CUSTOM)
-        self.box.setCornerRadius_(10)
-        self.box.setBorderWidth_(1)
-        self.box.setBorderColor_(NSColor.controlAccentColor())
-        self.box.setFillColor_(NSColor.controlBackgroundColor())
-        self.box.setTitlePosition_(0)  # no title
+        card_h = y - 76 - ui.GAP
+        self.box = ui.card(NSMakeRect(PAD, 76, WIDTH - 2 * PAD, card_h))
         content.addSubview_(self.box)
+        v, w = self.box.contentView(), WIDTH - 2 * PAD
+        self.shown = ui.label(current.title, 30, weight=0.3)
+        self.shown.setAlignment_(1)  # centre
+        ui.place(v, self.shown, 16, card_h / 2 - 2, w - 32, 38)
+        self.hint = ui.label("Function keys work alone; other keys need ⌘, ⌥, ⌃ or ⇧.", 12,
+                             NSColor.secondaryLabelColor(), wrap=True)
+        self.hint.setAlignment_(1)
+        ui.place(v, self.hint, 16, card_h / 2 - 40, w - 32, 32)
 
-        self.shown = _label(current.title, 22, NSColor.labelColor(), 0.3, 1)
-        self.shown.setFrame_(NSMakeRect(8, 18, WIDTH - 2 * pad - 16, 28))
-        self.box.contentView().addSubview_(self.shown)
-
-        self.hint = _label("Function keys work alone; other keys need ⌘, ⌥, ⌃ or ⇧.", 11, NSColor.secondaryLabelColor())
-        self.hint.setFrame_(NSMakeRect(pad, 56, WIDTH - 2 * pad, 16))
-        content.addSubview_(self.hint)
-
-        self.save = NSButton.buttonWithTitle_target_action_("Save", self, "saveClicked:")
+        self.save = ui.capsule_button("Save", self, "saveClicked:", primary=True)
         self.save.setKeyEquivalent_("\r")
-        self.save.setEnabled_(False)
-        cancel = NSButton.buttonWithTitle_target_action_("Cancel", self, "cancelClicked:")
+        ui.enable(self.save, False)
+        cancel = ui.capsule_button("Cancel", self, "cancelClicked:")
         cancel.setKeyEquivalent_("\x1b")
-        for b in (self.save, cancel):
-            b.sizeToFit()
-        sw, cw = max(self.save.frame().size.width, 80), max(cancel.frame().size.width, 80)
-        self.save.setFrame_(NSMakeRect(WIDTH - pad - sw, 16, sw, 32))
-        cancel.setFrame_(NSMakeRect(WIDTH - pad - sw - 12 - cw, 16, cw, 32))
-        content.addSubview_(cancel)
-        content.addSubview_(self.save)
+        sw, cw = self.save.frame().size.width, cancel.frame().size.width
+        ui.place(content, self.save, WIDTH - PAD - sw, 24, sw, 30)
+        ui.place(content, cancel, WIDTH - PAD - sw - 12 - cw, 24, cw, 30)
 
     @objc.python_method
     def show(self):
@@ -120,7 +89,7 @@ class ShortcutRecorder(NSObject):
             self.shown.setTextColor_(NSColor.labelColor())
         self.hint.setStringValue_(message or "Press Save to use it, or press another shortcut.")
         self.hint.setTextColor_(NSColor.systemOrangeColor() if message else NSColor.secondaryLabelColor())
-        self.save.setEnabled_(shortcut is not None)
+        ui.enable(self.save, shortcut is not None)
 
     # --- recording -------------------------------------------------------------
 

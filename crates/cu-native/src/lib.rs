@@ -155,14 +155,6 @@ pub unsafe extern "C" fn cu_capture_to_file(x: f64, y: f64, w: f64, h: f64, out_
 }
 
 /// # Safety
-/// Every pointer must be null or a valid NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn cu_is_risky_action(op: *const c_char, label: *const c_char, detail: *const c_char) -> bool {
-    // On a panic, err on the side of asking the user.
-    ffi_guard(true, || decision::is_risky_action(c_str(op).unwrap_or(""), c_str(label).unwrap_or(""), c_str(detail).unwrap_or("")))
-}
-
-/// # Safety
 /// `task` must be null or a valid NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn cu_extract_text_candidates(task: *const c_char, limit: usize) -> *mut c_char {

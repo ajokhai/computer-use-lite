@@ -66,7 +66,7 @@ class MenuBar(rumps.App):
             "speak_replies": rumps.MenuItem("Speak Replies", callback=self.toggle),
             "narrate": rumps.MenuItem("Narrate While Working", callback=self.toggle),
             "confirm_all": rumps.MenuItem("Ask Before Every Action", callback=self.toggle),
-            "allow_risky": rumps.MenuItem("Don't Ask Before Send, Buy or Delete", callback=self.toggle),
+            "allow_risky": rumps.MenuItem("Don't Ask Before Paying or Deleting", callback=self.toggle),
             "awake": rumps.MenuItem("Keep Mac Awake", callback=self.toggle),
             "auto_switch": rumps.MenuItem("Switch Models When One Runs Out", callback=self.toggle),
         }
@@ -123,7 +123,7 @@ class MenuBar(rumps.App):
         usage.clear_exhausted()
         self.refresh()
         self.refresh_usage()
-        rumps.Timer(self.pump, 0.15).start()
+        rumps.Timer(self.pump, 0.1).start()
         rumps.Timer(lambda _: self.refresh_usage(), 30).start()
         rumps.Timer(lambda _: self.check_updates(), 6 * 3600).start()
         rumps.Timer(self._first_update_check, 8).start()
@@ -452,7 +452,7 @@ class MenuBar(rumps.App):
             NSEvent.removeMonitor_(m)
         hotkey.unregister()
         current = self.shortcut()
-        detector = Detector(current)
+        detector = self._detector = Detector(current)
         if current.kind == "key" and not hotkey.register(current.key_code, current.mods, self.shortcut_pressed):
             rumps.notification("Computer Use", f"{current.label} is taken",
                                "Another app uses that shortcut. Pick another in Settings › Shortcut.")
@@ -461,8 +461,7 @@ class MenuBar(rumps.App):
             detector.key_down(event.keyCode(), event.modifierFlags(), time.monotonic())
 
         def on_flags(event):
-            if detector.flags_changed(event.modifierFlags(), time.monotonic()):
-                self.shortcut_pressed()
+            self.on_gesture(detector.flags_changed(event.modifierFlags(), time.monotonic()))
 
         def local(handler):
             def run(event):
@@ -606,21 +605,30 @@ class MenuBar(rumps.App):
         if self.settings["open_listening"] if listening is None else listening:
             self.start_listening()
 
-    def shortcut_pressed(self):
-        """Each press moves things along: open the bar (listening, if that's on), then start
-        listening, then send what was heard."""
-        if self.prompt_bar is None or not self.prompt_bar.is_visible():
-            self.open_bar()
-        elif self.prompt_bar.listening:
-            self.stop_listening()
-        else:
+    def on_gesture(self, gesture: str | None):
+        """Double-tap opens or closes the bar; double-tap and hold listens while held, then sends."""
+        if gesture == "double_tap":
+            self.shortcut_pressed()
+        elif gesture == "hold_start":
+            self.open_bar(listening=False)
             self.start_listening()
+        elif gesture == "hold_end" and self.bar_listening():
+            self.stop_listening(send=True)
+
+    def shortcut_pressed(self):
+        """The shortcut opens the bar, and pressing it again closes it."""
+        if self.prompt_bar is not None and self.prompt_bar.is_visible():
+            if self.prompt_bar.listening:
+                self.stop_listening(send=False)
+            self.prompt_bar.hide()
+        else:
+            self.open_bar()
 
     def start_listening(self):
         bar = self.bar()
         if not bar.is_visible():
             bar.show()
-        bar.set_listening(True, f"press {self.shortcut().label}")
+        bar.set_listening(True)
         self.direct = True
         self.ensure_voice(self._listen)
 
@@ -828,6 +836,9 @@ class MenuBar(rumps.App):
         return answer[0]
 
     def pump(self, _):
+        detector = getattr(self, "_detector", None)
+        if detector is not None:
+            self.on_gesture(detector.tick(time.monotonic()))
         self._voice_tick()
         while not self.events.empty():
             kind, payload = self.events.get()

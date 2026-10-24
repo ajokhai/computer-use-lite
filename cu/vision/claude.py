@@ -74,7 +74,7 @@ class Claude(VisionModel):
     def _act(self, instruction: str, max_turns: int = 15, confirm: Callable[[str], bool] = lambda m: False,
              log: Callable[[str], None] = print, stop=None, narrate: Callable[[str], None] = lambda t: None,
              allow_risky: bool = False, confirm_all: bool = False) -> tuple[bool, str]:
-        guard = Guard(confirm, allow_risky, confirm_all)
+        guard = Guard(confirm, allow_risky, confirm_all, task=instruction)
         shot = Shot()
         messages = [{"role": "user", "content": [{"type": "text", "text": instruction}, _image(shot.png)]}]
         for turn in range(max_turns):

@@ -1,19 +1,8 @@
-//! Small text rules shared by the Python agent: which actions need the user's OK, and which
-//! phrases from a task Jev may choose to type (Jev picks options; it does not write text).
-
-pub const RISKY_WORDS: &[&str] = &[
-    "send", "buy", "pay", "purchase", "order", "delete", "remove", "submit", "post",
-    "publish", "transfer", "confirm", "checkout", "place order", "erase", "trash",
-];
+//! Which phrases from a task Jev may choose to type (Jev picks options; it does not write text).
 
 /// First `n` characters of `s` (never splits a UTF-8 sequence).
 pub fn truncate_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
-}
-
-pub fn is_risky_action(op: &str, label: &str, detail: &str) -> bool {
-    let combined = format!("{} {} {}", op, label, detail).to_lowercase();
-    RISKY_WORDS.iter().any(|word| combined.contains(word))
 }
 
 pub fn extract_text_candidates(task: &str, limit: usize) -> Vec<String> {
@@ -196,10 +185,4 @@ mod tests {
         assert!(t0.elapsed().as_millis() < 500, "took {:?}", t0.elapsed());
     }
 
-    #[test]
-    fn risky_actions_need_confirmation() {
-        assert!(is_risky_action("CLICK", "Send", ""));
-        assert!(is_risky_action("CLICK", "Move to Trash", ""));
-        assert!(!is_risky_action("CLICK", "New Note", ""));
-    }
 }

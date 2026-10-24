@@ -3,44 +3,60 @@
 from cu.shortcut import CMD, CTRL, DEFAULT, FN, OPT, SHIFT, Detector, Shortcut
 
 
-def taps(d: Detector, events):
-    """events: (flags, t) pairs for flagsChanged; returns the times it fired."""
-    return [t for flags, t in events if d.flags_changed(flags, t)]
+def gestures(d: Detector, events):
+    """events: (flags, t) for flagsChanged, or ("tick", t); returns (gesture, t) for each reported."""
+    out = []
+    for flags, t in events:
+        g = d.tick(t) if flags == "tick" else d.flags_changed(flags, t)
+        if g:
+            out.append((g, t))
+    return out
 
 
-def test_double_tap_fires_on_the_second_press():
+def test_double_tap_fires_when_the_second_tap_ends():
     d = Detector(Shortcut("double_tap", CTRL))
-    assert taps(d, [(CTRL, 0.0), (0, 0.08), (CTRL, 0.25), (0, 0.3)]) == [0.25]
+    assert gestures(d, [(CTRL, 0.0), (0, 0.08), (CTRL, 0.25), ("tick", 0.3), (0, 0.32)]) == [("double_tap", 0.32)]
 
 
-def test_slow_taps_holds_and_chords_dont_fire():
+def test_double_tap_and_hold_listens_until_release():
     d = Detector(Shortcut("double_tap", CTRL))
-    assert taps(d, [(CTRL, 0.0), (0, 0.1), (CTRL, 0.9), (0, 1.0)]) == []  # too far apart
-    assert taps(d, [(CTRL, 2.0), (0, 2.8), (CTRL, 2.9)]) == []  # first press was a hold
-    assert taps(d, [(CTRL, 4.0), (CTRL | SHIFT, 4.05), (0, 4.1), (CTRL, 4.2)]) == []  # ⌃⇧ is a chord
-    assert taps(d, [(CMD, 5.0), (0, 5.05), (CMD, 5.1)]) == []  # wrong modifier
+    events = [(CTRL, 0.0), (0, 0.08), (CTRL, 0.25), ("tick", 0.4), ("tick", 0.6), ("tick", 2.0), (0, 3.1)]
+    assert gestures(d, events) == [("hold_start", 0.6), ("hold_end", 3.1)]
 
 
-def test_typing_between_taps_cancels():
+def test_slow_taps_long_first_press_and_chords_dont_fire():
+    d = Detector(Shortcut("double_tap", CTRL))
+    assert gestures(d, [(CTRL, 0.0), (0, 0.1), (CTRL, 0.9), (0, 1.0)]) == []  # too far apart
+    assert gestures(d, [(CTRL, 2.0), (0, 2.8), (CTRL, 2.9), (0, 3.0)]) == []  # first press was a hold
+    assert gestures(d, [(CTRL, 4.0), (CTRL | SHIFT, 4.05), (0, 4.1), (CTRL, 4.2), (0, 4.25)]) == []  # ⌃⇧ chord
+    assert gestures(d, [(CMD, 5.0), (0, 5.05), (CMD, 5.1), (0, 5.15)]) == []  # wrong modifier
+
+
+def test_typing_cancels_a_pending_tap():
     d = Detector(Shortcut("double_tap", CTRL))
     d.flags_changed(CTRL, 0.0)
     d.flags_changed(0, 0.05)
-    assert d.key_down(0, 0, 0.1) is False
-    assert d.flags_changed(CTRL, 0.2) is False
+    assert d.key_down(0, 0, 0.1) is None
+    d.flags_changed(CTRL, 0.2)
+    assert d.flags_changed(0, 0.25) is None
+    # ⌃⌃ then ⌃C while holding the second press: a shortcut in the app, not a tap
+    d.flags_changed(CTRL, 1.0); d.flags_changed(0, 1.05); d.flags_changed(CTRL, 1.2)
+    d.key_down(8, CTRL, 1.25)
+    assert d.flags_changed(0, 1.3) is None
 
 
 def test_three_quick_taps_fire_once():
     d = Detector(Shortcut("double_tap", OPT))
-    assert taps(d, [(OPT, 0), (0, .05), (OPT, .1), (0, .15), (OPT, .2), (0, .25)]) == [.1]
+    assert [g for g, _ in gestures(d, [(OPT, 0), (0, .05), (OPT, .1), (0, .15), (OPT, .2), (0, .25)])] == ["double_tap"]
 
 
 def test_key_shortcuts_need_exact_modifiers():
     d = Detector(Shortcut("key", OPT, 49, "Space"))
-    assert d.key_down(49, OPT, 0) is True
-    assert d.key_down(49, OPT | FN, 0) is True  # fn/caps state doesn't matter
-    assert d.key_down(49, OPT | CMD, 0) is False
-    assert d.key_down(49, 0, 0) is False
-    assert Detector(Shortcut("double_tap", CTRL)).key_down(49, OPT, 0) is False
+    assert d.key_down(49, OPT, 0) == "double_tap"
+    assert d.key_down(49, OPT | FN, 0) == "double_tap"  # fn/caps state doesn't matter
+    assert d.key_down(49, OPT | CMD, 0) is None
+    assert d.key_down(49, 0, 0) is None
+    assert Detector(Shortcut("double_tap", CTRL)).key_down(49, OPT, 0) is None
 
 
 def test_labels():

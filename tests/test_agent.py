@@ -6,7 +6,7 @@ import pytest
 from cu import actions, agent
 from cu.screen import Element
 
-BUTTON = Element(id="e0", role="AXButton", label="Send", x=10, y=10, w=40, h=20)
+BUTTON = Element(id="e0", role="AXButton", label="Place Order", x=10, y=10, w=40, h=20)
 FIELD = Element(id="e1", role="AXTextField", label="Note", x=10, y=60, w=200, h=20)
 
 
@@ -74,7 +74,7 @@ def test_stuck_ends_the_task_without_prompting_anyone(desk):
 def test_risky_click_asks_and_a_no_stops(desk):
     asked = []
     a, out = run([("CLICK", BUTTON, "")], confirm=lambda m: asked.append(m) or False)
-    assert asked and "Send" in asked[0]
+    assert asked and "Place Order" in asked[0]
     assert out.startswith("stopped: user declined")
     assert desk == []
 

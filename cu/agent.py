@@ -241,7 +241,7 @@ class Agent:
 
             label = (el.label if el else "").lower()
             if self.confirm_all or (op in ("CLICK", "DOUBLE_CLICK", "PRESS_ENTER") and not self.allow_risky
-                                    and is_risky_action(op, label, desc)):
+                                    and is_risky_action(op, label, desc, task)):
                 if not self.confirm(f"About to: {desc}. Proceed?"):
                     return self._report("stopped: user declined")
             try:

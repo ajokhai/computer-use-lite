@@ -16,7 +16,8 @@ FUNCTION_KEYS = {122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 
 SPECIAL_KEYS = {49: "Space", 36: "↩", 48: "⇥", 51: "⌫", 53: "⎋", 123: "←", 124: "→", 125: "↓", 126: "↑"}
 
 DOUBLE_TAP_WINDOW = 0.45  # seconds between the two taps
-MAX_TAP = 0.35  # a press held longer than this is a hold, not a tap
+MAX_TAP = 0.35  # a first press held longer than this is a hold, not a tap
+HOLD = 0.3  # the second press held this long means "listen while held"
 
 
 @dataclass(frozen=True)
@@ -91,35 +92,53 @@ PRESETS = [
 
 
 class Detector:
-    """Feed it key events; it says when the shortcut fires. Times are in seconds."""
+    """Feed it key events (and tick() on a timer); it reports gestures. Times are in seconds.
+
+    Double-tap the modifier: "double_tap" when the second tap is released.
+    Double-tap and hold: "hold_start" once the second press has been held for HOLD, then
+    "hold_end" when it's released. A key shortcut reports "double_tap" when pressed."""
 
     def __init__(self, shortcut: Shortcut):
         self.shortcut = shortcut
         self._down_at = None  # when the tapped modifier went down
         self._last_tap = None  # when the previous complete tap ended
+        self._second = None  # when the second press went down (tap or hold, not decided yet)
+        self._holding = False
 
-    def key_down(self, key_code: int, flags: int, t: float) -> bool:
-        """True if this key press is the shortcut (the caller should swallow it)."""
-        self._down_at = self._last_tap = None  # typing between taps cancels a double tap
+    def key_down(self, key_code: int, flags: int, t: float) -> str | None:
+        """"double_tap" if this key press is a key shortcut (the caller should swallow it)."""
         s = self.shortcut
-        return s.kind == "key" and key_code == s.key_code and (flags & CHORD_MODS) == s.mods
+        if not self._holding:  # typing between or during taps cancels them (⌃C is not a tap)
+            self._down_at = self._last_tap = self._second = None
+        if s.kind == "key" and key_code == s.key_code and (flags & CHORD_MODS) == s.mods:
+            return "double_tap"
+        return None
 
-    def flags_changed(self, flags: int, t: float) -> bool:
-        """True when the second quick tap of the modifier goes down."""
+    def flags_changed(self, flags: int, t: float) -> str | None:
         s = self.shortcut
         if s.kind != "double_tap":
-            return False
+            return None
         held = flags & (CHORD_MODS | FN)
         if held == s.mods:  # exactly our modifier, alone
             if self._down_at is None:
                 if self._last_tap is not None and t - self._last_tap <= DOUBLE_TAP_WINDOW:
-                    self._last_tap = None
-                    return True
+                    self._second, self._last_tap = t, None
                 self._down_at = t
-            return False
-        if held == 0 and self._down_at is not None:  # released: was it a quick tap?
+            return None
+        event = None
+        if self._second is not None:  # the second press ended (or another modifier joined)
+            event = "hold_end" if self._holding else ("double_tap" if held == 0 else None)
+            self._second, self._holding, self._last_tap = None, False, None
+        elif held == 0 and self._down_at is not None:  # first press released: was it a quick tap?
             self._last_tap = t if t - self._down_at <= MAX_TAP else None
         else:  # another modifier joined in: not a tap
             self._last_tap = None
         self._down_at = None
-        return False
+        return event
+
+    def tick(self, t: float) -> str | None:
+        """Call often (every ~0.1 s): "hold_start" once the second press has been held for HOLD."""
+        if self._second is not None and not self._holding and t - self._second >= HOLD:
+            self._holding = True
+            return "hold_start"
+        return None

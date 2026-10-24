@@ -4,6 +4,7 @@ scaling between a screenshot and screen points, and asking before risky clicks a
 import base64
 import io
 import json
+import re
 import time
 from contextlib import contextmanager
 from typing import Callable
@@ -11,7 +12,7 @@ from typing import Callable
 from PIL import Image
 
 from .. import actions, usage
-from ..screen import Element, _load_native_lib, ax_elements, capture, screenshot_png
+from ..screen import Element, ax_elements, capture, screenshot_png
 
 PLAN_SYSTEM = """You control a macOS computer for the user. Look at the screenshot and the
 accessibility elements of the frontmost app, then return the next few ATOMIC steps toward the task.
@@ -41,20 +42,31 @@ need credentials, 2FA, or a decision."""
 
 CONTINUE_NOTE = "\n(Continue from the current screen; some of this may already be done.)"
 
-RISKY_WORDS = ("send", "buy", "pay", "purchase", "order", "delete", "remove", "submit", "post",
-               "publish", "transfer", "confirm", "checkout", "place order", "erase", "trash")
+# The only things worth interrupting the user for: spending money and permanently deleting, and
+# only when their request didn't ask for it ("post a tweet" means clicking Post needs no question).
+# Control label word -> phrases in a request that ask for it.
+RISKY_WORDS = {
+    "buy": ("buy", "purchas", "order", "pay"),
+    "pay": ("pay", "purchas", "buy", "checkout", "check out", "order"),
+    "purchase": ("purchas", "buy", "order"),
+    "checkout": ("checkout", "check out", "buy", "purchas", "order", "pay"),
+    "place order": ("order", "buy", "purchas"),
+    "subscribe": ("subscri",),
+    "transfer": ("transfer", "send money", "pay"),
+    "send money": ("send money", "pay", "transfer"),
+    "donate": ("donat",),
+    "delete": ("delet", "remov", "clean up", "clear"),
+    "erase": ("eras", "wipe", "delet"),
+    "empty trash": ("empty", "trash", "delet"),
+}
 
 
-def is_risky_action(op: str, label: str = "", detail: str = "") -> bool:
-    """Evaluate whether an action is risky and warrants user confirmation (native Rust backend)."""
-    lib = _load_native_lib()
-    if lib and hasattr(lib, "cu_is_risky_action"):
-        try:
-            return bool(lib.cu_is_risky_action(op.encode("utf-8"), label.encode("utf-8"), detail.encode("utf-8")))
-        except Exception:
-            pass
-    combined = f"{op} {label} {detail}".lower()
-    return any(w in combined for w in RISKY_WORDS)
+def is_risky_action(op: str, label: str = "", detail: str = "", task: str = "") -> bool:
+    """Whether an action needs the user's OK: it pays or permanently deletes, judged by the
+    control's label (whole words), and the request in `task` didn't ask for that."""
+    text, asked = f"{label} {detail}".lower(), task.lower()
+    return any(re.search(rf"\b{re.escape(word)}\b", text) and not any(a in asked for a in asks)
+               for word, asks in RISKY_WORDS.items())
 
 
 class ModelSwitched(Exception):
@@ -111,12 +123,13 @@ def element_at(x: int, y: int) -> Element | None:
 
 
 class Guard:
-    """Asks before an action when the user wants every action confirmed, or when it would click a
-    send/buy/delete-style control (judged by the accessibility label under the point) or press Return
-    in one. The same rule the Jev loop uses, so every vision model gets it."""
+    """Asks before an action only when the user wants every action confirmed, or when it would pay
+    or permanently delete something the request didn't ask for (judged by the accessibility label
+    under the point, or of the field Return is pressed in). The same rule the Jev loop uses."""
 
-    def __init__(self, confirm: Callable[[str], bool], allow_risky: bool = False, confirm_all: bool = False):
-        self.confirm, self.allow_risky, self.confirm_all = confirm, allow_risky, confirm_all
+    def __init__(self, confirm: Callable[[str], bool], allow_risky: bool = False, confirm_all: bool = False,
+                 task: str = ""):
+        self.confirm, self.allow_risky, self.confirm_all, self.task = confirm, allow_risky, confirm_all, task
 
     def _ask(self, what: str):
         if not self.confirm(f"About to: {what}. Proceed?"):
@@ -128,7 +141,7 @@ class Guard:
         if self.allow_risky:
             return
         el = element_at(x, y)
-        if el is not None and is_risky_action("CLICK", el.label.lower(), what):
+        if el is not None and is_risky_action("CLICK", el.label, what, self.task):
             self._ask(f"{what} {el.describe()}")
 
     def keys(self, keys: list[str], what: str = ""):
@@ -139,7 +152,7 @@ class Guard:
             return
         _, els = ax_elements(limit=200)
         el = next((e for e in els if e.focused), None)
-        if el is not None and is_risky_action("PRESS_ENTER", el.label.lower(), what):
+        if el is not None and is_risky_action("PRESS_ENTER", el.label, what, self.task):
             self._ask(f"{what} in {el.describe()}")
 
     def other(self, what: str):

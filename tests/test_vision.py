@@ -10,7 +10,7 @@ from cu import actions, agent, config, usage, vision
 from cu.screen import Element
 from cu.vision import base, claude, compat, openai as oai
 
-SEND = Element(id="e0", role="AXButton", label="Send", x=200, y=100, w=60, h=30)
+SEND = Element(id="e0", role="AXButton", label="Buy Now", x=200, y=100, w=60, h=30)
 NOTE = Element(id="e1", role="AXTextField", label="Note", x=300, y=400, w=200, h=30)
 
 
@@ -197,7 +197,7 @@ def test_claude_risky_click_asks_and_a_no_stops(desk):
     _, (ok, msg) = run_claude([reply(use("left_click", 1, coordinate=[100, 50]))],
                               confirm=lambda q: asked.append(q) or False)
     assert not ok and msg.startswith("user declined")
-    assert asked and "Send" in asked[0]
+    assert asked and "Buy Now" in asked[0]
     assert desk == []
 
 
@@ -313,8 +313,8 @@ def test_compatible_models_click_elements_by_id_or_pixels(desk):
 def test_compatible_risky_click_by_element_asks(desk):
     client = FakeChat(['{"status": "continue", "actions": [{"type": "click", "element": "e0"}]}'])
     m = compat.OpenRouter(["vendor/model"], log=lambda s: None, client=client)
-    ok, msg = m.act("send it", confirm=lambda q: False, log=lambda s: None)
-    assert not ok and "Send" in msg and desk == []
+    ok, msg = m.act("tidy the page", confirm=lambda q: False, log=lambda s: None)
+    assert not ok and "Buy Now" in msg and desk == []
 
 
 def test_a_local_server_that_isnt_running_counts_as_unavailable():
@@ -343,3 +343,14 @@ def test_shot_maps_through_the_display_origin():
     s.ox, s.oy, s.scale = -1920, -200, 2.0
     assert s.point(100, 50) == (-1720, -100)
     assert s.pixel(-1720, -100) == (100, 50)
+
+
+def test_only_unrequested_payments_and_deletions_need_asking():
+    from cu.vision.base import is_risky_action as risky
+    assert not risky("CLICK", "Post", "", "post a tweet saying hi")  # the request asked for it
+    assert not risky("CLICK", "Send", "", "reply to Sam")  # sending isn't paying or deleting
+    assert not risky("CLICK", "Border", "", "")  # whole words only
+    assert risky("CLICK", "Buy Now", "", "find the cheapest flight")
+    assert not risky("CLICK", "Buy Now", "", "buy the cheapest flight")
+    assert risky("CLICK", "Delete", "", "tidy my inbox")
+    assert not risky("CLICK", "Delete", "", "delete the spam emails")

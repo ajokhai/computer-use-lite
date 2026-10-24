@@ -18,32 +18,34 @@ from AppKit import (
     NSFont,
     NSImage,
     NSImageSymbolConfiguration,
+    NSImageView,
     NSMakeRect,
     NSPanel,
     NSPopUpButton,
     NSScreen,
     NSTextField,
-    NSVisualEffectView,
+    NSView,
     NSWindowStyleMaskBorderless,
     NSWindowStyleMaskNonactivatingPanel,
     NSWorkspace,
 )
 from Foundation import NSObject, NSMakeSize
+from Quartz import CGColorCreateGenericRGB
 from PyObjCTools import AppHelper
 
+from . import ui
 from .config import load_settings, save_settings
 
-WIDTH, HEIGHT, RADIUS = 640.0, 56.0, 14.0
+WIDTH, HEIGHT, RADIUS = 720.0, 64.0, 20.0
+SEND = 36.0  # the send button: a rounded square, like the reference bars
+BOTTOM = 0.10  # how far up the screen the bar sits, as a fraction of its height
 MODES = [("Auto", "auto", "Best your keys and quota allow"),
          ("Vision + Jev", "hybrid", "A vision model plans, Jev clicks"),
          ("Jev", "jev", "Jev only: cheapest, types only text from your request"),
          ("Vision", "vision", "A vision model does everything")]
 MAX_RECENT = 20
-PLACEHOLDER = "Ask Computer Use to do something…"
+PLACEHOLDER = "What can I do for you?"
 
-_MATERIAL_POPOVER = 6
-_BLEND_BEHIND_WINDOW = 0
-_STATE_ACTIVE = 1
 _LINE_BREAK_TRUNCATE_HEAD = 3  # keep the end of a long transcript visible
 
 
@@ -69,21 +71,6 @@ def _symbol(name: str, size: float, weight: str = "regular") -> NSImage:
     img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
     cfg = NSImageSymbolConfiguration.configurationWithPointSize_weight_(size, weights[weight])
     return img.imageWithSymbolConfiguration_(cfg)
-
-
-def _rounded_mask(radius: float) -> NSImage:
-    """A stretchable rounded-rect mask, so the frosted background has rounded corners."""
-    edge = radius * 2 + 1
-
-    def draw(rect):
-        NSColor.blackColor().set()
-        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, radius, radius).fill()
-        return True
-
-    img = NSImage.imageWithSize_flipped_drawingHandler_(NSMakeSize(edge, edge), False, draw)
-    img.setCapInsets_((radius, radius, radius, radius))
-    img.setResizingMode_(1)  # stretch the middle
-    return img
 
 
 def _icon_button(symbol: str, size: float, action: str, target, tip: str) -> NSButton:
@@ -132,21 +119,39 @@ class PromptBar(NSObject):
         self.panel.setHidesOnDeactivate_(False)
         self.panel.setDelegate_(self)
 
-        bg = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, WIDTH, HEIGHT))
-        bg.setMaterial_(_MATERIAL_POPOVER)
-        bg.setBlendingMode_(_BLEND_BEHIND_WINDOW)
-        bg.setState_(_STATE_ACTIVE)
-        bg.setMaskImage_(_rounded_mask(RADIUS))
+        # A solid card in the app's look (cu/ui.py), with a hairline edge and the window's soft shadow.
+        bg = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, WIDTH, HEIGHT))
+        bg.setWantsLayer_(True)
+        bg.layer().setCornerRadius_(RADIUS)
+        bg.layer().setMasksToBounds_(True)
+        bg.layer().setBorderWidth_(1.0)
         self.panel.setContentView_(bg)
+        self._paint()
 
         mid = HEIGHT / 2
+        glyph = NSImageView.alloc().initWithFrame_(NSMakeRect(18, mid - 13, 26, 26))
+        glyph.setImage_(_symbol("cursorarrow.rays", 20, "medium"))
+        glyph.setContentTintColor_(ui.dynamic(*(ui._rgb(ui.WARM[0]),) * 2))
+        bg.addSubview_(glyph)
+
+        self.send = NSButton.alloc().initWithFrame_(NSMakeRect(WIDTH - 14 - SEND, mid - SEND / 2, SEND, SEND))
+        self.send.setBordered_(False)
+        self.send.setWantsLayer_(True)
+        self.send.layer().setCornerRadius_(10)
+        self.send.setImage_(_symbol("arrow.up", 16, "semibold"))
+        self.send.setImagePosition_(1)  # image only
+        self.send.setToolTip_("Run (Return)")
+        self.send.setTarget_(self)
+        self.send.setAction_("sendClicked:")
+        bg.addSubview_(self.send)
+
         self.mic = _icon_button("mic", 17, "micClicked:", self, "Speak your request")
-        self.mic.setFrameOrigin_((14, mid - 14))
+        self.mic.setFrameOrigin_((WIDTH - 14 - SEND - 8 - 28, mid - 14))
         bg.addSubview_(self.mic)
 
         self.mode = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(0, 0, 80, 24), False)
         self.mode.setBordered_(False)
-        self.mode.setFont_(NSFont.systemFontOfSize_(12))
+        self.mode.setFont_(NSFont.systemFontOfSize_(14))
         self.mode.setContentTintColor_(NSColor.secondaryLabelColor())
         for title, key, tip in MODES:
             self.mode.addItemWithTitle_(title)
@@ -159,16 +164,13 @@ class PromptBar(NSObject):
         self.mode.cell().setAlignment_(2)  # right: keep the title next to its chevrons
         mode_w = self.mode.frame().size.width
         self.mode.setToolTip_("Which model does the work")
-
-        self.send = _icon_button("arrow.up.circle.fill", 22, "sendClicked:", self, "Run (Return)")
-        self.send.setFrameOrigin_((WIDTH - 14 - 28, mid - 14))
-        self.mode.setFrameOrigin_((WIDTH - 14 - 28 - 4 - mode_w, mid - 12))
+        self.mode.setFrameOrigin_((WIDTH - 14 - SEND - 8 - 28 - 8 - mode_w, mid - 12))
         bg.addSubview_(self.mode)
-        bg.addSubview_(self.send)
+        right = 14 + SEND + 8 + 28 + 8 + mode_w + 12
 
-        field_x = 14 + 28 + 8
-        field_w = WIDTH - field_x - (14 + 28 + 4 + mode_w + 8)
-        self.field = NSTextField.alloc().initWithFrame_(NSMakeRect(field_x, mid - 12, field_w, 24))
+        field_x = 18 + 26 + 12
+        field_w = WIDTH - field_x - right
+        self.field = NSTextField.alloc().initWithFrame_(NSMakeRect(field_x, mid - 13, field_w, 26))
         self.field.setCell_(_BarFieldCell.alloc().initTextCell_(""))
         self.field.setEditable_(True)
         self.field.setBezeled_(False)
@@ -176,7 +178,7 @@ class PromptBar(NSObject):
         self.field.setDrawsBackground_(False)
         self.field.setBackgroundColor_(NSColor.clearColor())  # the editing clip view paints this
         self.field.setFocusRingType_(NSFocusRingTypeNone)
-        self.field.setFont_(NSFont.systemFontOfSize_(17))
+        self.field.setFont_(NSFont.systemFontOfSize_(18))
         self.field.setTextColor_(NSColor.labelColor())
         self.field.setPlaceholderString_(PLACEHOLDER)
         self.field.cell().setLineBreakMode_(_LINE_BREAK_TRUNCATE_HEAD)
@@ -187,6 +189,14 @@ class PromptBar(NSObject):
         self.set_mode(load_settings().get("mode", "auto"))
         self._update_send()
 
+    @objc.python_method
+    def _paint(self):
+        """Layer colours are fixed CGColors, so resolve them for the current appearance."""
+        bg = self.panel.contentView()
+        dark = "Dark" in str(NSApplication.sharedApplication().effectiveAppearance().name())
+        bg.layer().setBackgroundColor_(CGColorCreateGenericRGB(*((0.122, 0.122, 0.133) if dark else (1, 1, 1)), 1))
+        bg.layer().setBorderColor_(CGColorCreateGenericRGB(*((1, 1, 1, 0.10) if dark else (0, 0, 0, 0.08))))
+
     # --- showing -------------------------------------------------------------
 
     @objc.python_method
@@ -195,15 +205,17 @@ class PromptBar(NSObject):
 
     @objc.python_method
     def show(self, previous_app=None):
-        """Open on the screen with the pointer, a third of the way down, ready to type."""
+        """Open at the bottom center of the screen with the pointer, ready to type."""
         self.previous_app = previous_app or NSWorkspace.sharedWorkspace().frontmostApplication()
         mouse = NSEvent.mouseLocation()
         screen = next((s for s in NSScreen.screens() if _contains(s.frame(), mouse)), NSScreen.mainScreen())
         if screen is not None:
             v = screen.visibleFrame()
-            self.panel.setFrameOrigin_((v.origin.x + (v.size.width - WIDTH) / 2, v.origin.y + v.size.height * 0.62))
+            self.panel.setFrameOrigin_((v.origin.x + (v.size.width - WIDTH) / 2,
+                                        v.origin.y + max(48.0, v.size.height * BOTTOM)))
         self._recent_index = None
         self.set_mode(load_settings().get("mode", "auto"))
+        self._paint()
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self.panel.makeKeyAndOrderFront_(None)
         self.panel.makeFirstResponder_(self.field)
@@ -230,7 +242,7 @@ class PromptBar(NSObject):
         self.mic.setToolTip_("Stop listening" if on else "Speak your request")
         if on:
             self._set_text("")
-            self.field.setPlaceholderString_(f"Listening… {hint} or Return to send" if hint else "Listening… Return to send")
+            self.field.setPlaceholderString_("Listening…")
         else:
             self.field.setPlaceholderString_(PLACEHOLDER)
         self._update_send()
@@ -299,7 +311,11 @@ class PromptBar(NSObject):
     def _update_send(self):
         has_text = bool(self.field.stringValue().strip())
         self.send.setEnabled_(has_text)
-        self.send.setContentTintColor_(NSColor.controlAccentColor() if has_text else NSColor.tertiaryLabelColor())
+        warm = ui._rgb(ui.WARM[0])
+        fill = CGColorCreateGenericRGB(warm.redComponent(), warm.greenComponent(), warm.blueComponent(), 1) \
+            if has_text else CGColorCreateGenericRGB(0.5, 0.5, 0.5, 0.18)
+        self.send.layer().setBackgroundColor_(fill)
+        self.send.setContentTintColor_(NSColor.whiteColor() if has_text else NSColor.tertiaryLabelColor())
 
     def micClicked_(self, sender):
         if self.app is None:
@@ -319,7 +335,10 @@ class PromptBar(NSObject):
 
     # NSTextField delegate
     def controlTextDidChange_(self, note):
+        # Only typing fires this (not text the bar sets), so the user typing takes over from the mic.
         self._recent_index = None
+        if self.listening and self.app is not None:
+            self.app.stop_listening(send=False)
         self._update_send()
 
     def control_textView_doCommandBySelector_(self, control, view, selector):

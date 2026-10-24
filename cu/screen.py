@@ -200,9 +200,6 @@ def _load_native_lib():
                 if hasattr(lib, "cu_capture_to_file"):
                     lib.cu_capture_to_file.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_char_p]
                     lib.cu_capture_to_file.restype = ctypes.c_bool
-                if hasattr(lib, "cu_is_risky_action"):
-                    lib.cu_is_risky_action.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
-                    lib.cu_is_risky_action.restype = ctypes.c_bool
                 if hasattr(lib, "cu_extract_text_candidates"):
                     lib.cu_extract_text_candidates.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
                     lib.cu_extract_text_candidates.restype = ctypes.c_void_p

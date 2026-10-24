@@ -22,7 +22,7 @@ pub const INSTRUCTIONS: &str = "Tools to see and operate the user's whole Mac (a
 Loop: look (list_screen_elements, and take_screenshot when the elements don't tell you enough), do one action, then look again to check it worked.
 Prefer keyboard shortcuts (press_keys), select_menu, open_app and open_url over clicking. Prefer click_element (an id from list_screen_elements, or a description) over click_at.
 All x/y coordinates, in every tool's input and output, are pixels of the latest take_screenshot image, so they line up with what you see.
-Ask the user before sending, buying, deleting or submitting anything. If a tool says the mouse is in a screen corner, the user pressed the emergency stop: stop and ask.
+Don't stop to ask the user except before spending money or permanently deleting something they didn't ask for; otherwise carry the task through. If a tool says the mouse is in a screen corner, the user pressed the emergency stop: stop and ask.
 Use speak() for short spoken updates when the user may be listening rather than watching.";
 
 /// Tools that change something on screen; all refused while the emergency stop is active.

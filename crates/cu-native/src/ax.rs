@@ -186,6 +186,9 @@ pub const ACTIONABLE: &[&str] = &[
 ];
 pub const MAX_LABEL_CHARS: usize = 80;
 const WALK_TIMEOUT_MS: u128 = 2500;
+/// Chrome around the content: walked after everything else, so a browser's tabs, bookmarks and
+/// toolbar can't use up the element budget before the page itself is reached.
+const DEFERRED: &[&str] = &["AXToolbar", "AXTabGroup", "AXMenuBar"];
 const LABEL_ATTRS: [&str; 5] = ["AXTitle", "AXDescription", "AXValue", "AXPlaceholderValue", "AXHelp"];
 
 /// Labels for the window buttons, which have no title (their help text is no use as a label).
@@ -292,13 +295,27 @@ pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
     let mut elements = Vec::with_capacity(max_elements.min(512));
     let mut refs = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut stack: Vec<(CfRef, usize)> = roots.into_iter().rev().map(|r| (r, 0)).collect();
+    // (element, depth, already deferred once)
+    let mut stack: Vec<(CfRef, usize, bool)> = roots.into_iter().rev().map(|r| (r, 0, false)).collect();
+    let mut later: Vec<(CfRef, usize, bool)> = Vec::new();
 
-    while let Some((el, depth)) = stack.pop() {
+    loop {
+        let Some((el, depth, deferred)) = stack.pop() else {
+            if later.is_empty() {
+                break;
+            }
+            // Content is done: now the toolbars, tab strips and menu bar, in the order met.
+            stack = later.drain(..).rev().collect();
+            continue;
+        };
         if elements.len() >= max_elements || depth > 40 || t0.elapsed().as_millis() > WALK_TIMEOUT_MS {
-            continue; // `el` drops here; draining the stack releases everything else
+            continue; // `el` drops here; draining the stacks releases everything else
         }
         let role = copy_attr(&el, &k_role).map(|r| string_of(r.ptr())).unwrap_or_default();
+        if !deferred && DEFERRED.contains(&role.as_str()) {
+            later.push((el, depth, true));
+            continue;
+        }
 
         if ACTIONABLE.contains(&role.as_str()) {
             let subrole = if role == "AXButton" { copy_attr(&el, &k_subrole).map(|r| string_of(r.ptr())).unwrap_or_default() } else { String::new() };
@@ -338,7 +355,7 @@ pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
         if matches!(role.as_str(), "AXOutline" | "AXTable" | "AXList") {
             kids.truncate(12);
         }
-        stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1)));
+        stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1, deferred)));
     }
 
     Snapshot {
