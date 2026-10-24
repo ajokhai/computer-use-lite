@@ -42,7 +42,9 @@ Pick one under **Mode**. Modes are named by role. The vision model can be Claude
 ## The bar
 One shortcut opens a floating bar. The default is **double-tap Control**. Change it in **Settings › Shortcut**: pick a preset (double-tap Option, Command, Shift or Fn) or choose **Record Shortcut…** to record a key combination.
 
-- Press the shortcut once to open the bar, again to start listening, and again to send.
+- **Double-tap** opens the bar at the bottom of the screen, ready to type; double-tap again closes it.
+- **Double-tap and hold** the second tap: it listens while you hold, and sends what it heard when you let go.
+- Key shortcuts (like F5 or ⌥Space) open and close the bar.
 - The bar has a mic button, your request, the mode and a send button.
 - **Return** sends. **Esc** stops listening, or closes the bar. **Up/Down** steps through recent tasks.
 - Clicking away closes the bar, unless it's listening.
@@ -58,7 +60,7 @@ One shortcut opens a floating bar. The default is **double-tap Control**. Change
 ## Voice
 Voice options are in the **Voice** menu.
 
-- **Start Listening When the Bar Opens** (on by default): say what you want, then pause. Your words appear in the bar as you speak, and the task starts when you stop. Press the shortcut again to finish early.
+- **Start Listening When the Bar Opens** (off by default): the bar opens listening instead of ready to type. Your words appear as you speak, and the task starts when you pause. Start typing to take over from the mic.
 - **Hands-free — say “Computer, …”:** always listening, and acts only on speech that starts with "Computer" or "Hey computer".
 - **"Stop"** halts the running task. A new instruction mid-task replaces the current one.
 - **Speak Replies:** says "On it", reads any confirmation questions aloud, and gives a short summary when the task ends.
@@ -107,7 +109,7 @@ Picking a voice plays a short preview.
 3. Run `./packaging/release.sh "What changed"`. It builds, pushes, and creates the GitHub release with the DMG and Voice Pack attached.
 
 ## Safety
-- The app asks before clicking send, buy or delete-style buttons, unless you tick **While Working › Don't Ask Before Send, Buy or Delete**. **Ask Before Every Action** makes it ask before every step.
+- It doesn't stop to ask unless it's about to **pay for something or permanently delete something your request didn't ask for**. Asking it to "post a tweet" or "delete the spam" is permission enough. Tick **While Working › Don't Ask Before Paying or Deleting** to never be asked; **Ask Before Every Action** makes it ask before every step.
 - **Emergency stop:** move the mouse hard into any screen corner. This stops both the app and `cu-mcp`. You can also use **Stop** (⌘.).
 - Your clipboard never leaves your Mac.
 

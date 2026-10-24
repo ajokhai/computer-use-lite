@@ -30,7 +30,8 @@ LABELS = {"jev": "Jev", "gemini": "Gemini", "claude": "Claude", "claude-sonnet":
 
 TASKS = {
     "tweet": ("In Google Chrome, switch to the profile named \"familymake\", go to x.com, and post a tweet "
-              "that says exactly: \"This is {label} testing computer use with my account.\""),
+              "that says exactly: \"This is {label} testing computer use with my account. "
+              "https://github.com/ajokhai/computer-use-lite\""),
 }
 
 
