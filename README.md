@@ -131,6 +131,39 @@ Computer Use gets better at your apps the more it's used, whichever model does t
 - **Emergency stop:** press **Escape three times** quickly, or move the mouse hard into any screen corner. Either stops both the app's agent and any AI app driving the Mac through `cu-mcp`. You can also use **Stop** in the menu (⌘.).
 - Your clipboard never leaves your Mac.
 
+## Benchmarks
+Live runs on a real Mac (October 2026), checked by hand or by script, not by the model's own word. Raw logs are in `bench-results.jsonl`; run them yourself with `scripts/bench.py` (it drives the real Mac).
+
+**Tweet:** in Chrome, post a tweet that names the model and links this repo. Checked on the live profile.
+
+| Model | How | Result |
+|---|---|---|
+| Claude Opus 5.5 | through `cu-mcp`, no API key | Pass, 53 s |
+| Gemini 3.8 Flash | Antigravity's signed-in agent through `cu-mcp`, no API key | Pass, about 4 min (6 min 40 s on a rerun) |
+| Jev | the app's agent, Jev Only | Pass on attempt 3, 28 s, using a lesson saved by an earlier run. Failed before recovery and lessons existed. |
+
+**Desk:** no browser. Work out 1234 × 56 in Calculator; make a note in Notes with a list and the answer; add a reminder for tomorrow at 9 AM and a calendar event for tomorrow 3:00–3:30 PM; write a TextEdit document and save it, through the save dialog, into a new Desktop folder; quit Calculator, TextEdit, Reminders and Calendar; leave the folder open in Finder. Then **clean up**: delete the note, the reminder and the event, and move the folder to the Trash. `scripts/check_desk.py` scores each part, and the cleanup fails if anything else changed (exactly one note, reminder and event fewer, and the Desktop otherwise the same).
+
+| Model | How | Make (6 parts) | Clean up | Time |
+|---|---|---|---|---|
+| Claude Opus 5.5 | through `cu-mcp`, no API key | 6/6 | Everything it made is gone, and the note, reminder and event counts are right. Flagged: 24 Desktop screenshots went to the Trash about 6 minutes after the run's own delete; no agent's log shows how, and it's being looked into. | 5 min to make |
+
+More models are on the way.
+
+### What the benchmarks taught us
+Each run's surprises became a fix in the code or a lesson in memory, so the next run starts from them.
+
+- **First-launch "What's New" sheets** in Reminders and Calendar swallow whatever is typed. Lesson: click Continue first.
+- **Calculator ignores typed "×"** (it shows "%"). Lesson: click its buttons.
+- **Reminders rows aren't in the accessibility tree.** Lesson: search for the exact name so it's the only row, then click the row, not its circle (which marks it done instead of deleting it).
+- **A person clicking mid-run** brought another window to the front, and a click chosen by label matched text in that window. Fixed: a click by label now has to be a strong match in the expected app, or it's refused. Next: pause whenever the person uses the mouse or keyboard (their input can be told apart from the agent's).
+- **Clicks on covered windows** landed on the window on top. Fixed: `cu-mcp` brings the element's window forward first, and can read windows that aren't in front.
+- **Screenshots took 30 seconds** for the installed app on an external display. Fixed: after 5 seconds it switches to another capture method.
+- **"Close all the X tabs" closed the wrong tabs and missed some.** With no vision model left, Jev, which reads no screenshots and can't tell which tab is which, closed whatever was in front. Fixed: an unsure "done" now needs a clearly confident check, and the retry advice fits the task ("check none are left") instead of talking about Post buttons.
+- **The working icon** turned black instead of orange and switched off while an AI was thinking. Fixed: it's drawn in color and stays on for the whole task.
+- **The cleanup check caught files leaving the Desktop** that weren't part of the test (they were in the Trash, not lost). That's what it's for: a careless cleanup can't pass by deleting more than it should.
+- **The checker had bugs too:** deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now counts both correctly.
+
 ## Ports
 Computer Use is macOS only for now. Help with a port is welcome: see the draft pull requests for [Linux](https://github.com/ajokhai/computer-use-lite/pull/1) and [Windows](https://github.com/ajokhai/computer-use-lite/pull/2). Each one links a guide to what needs replacing.
 
