@@ -95,6 +95,9 @@ def main():
     p.add_argument("models", nargs="+", choices=MODELS)
     p.add_argument("--task", default="tweet", choices=TASKS)
     p.add_argument("--timeout", type=int, default=900)
+    p.add_argument("--no-cleanup", action="store_true",
+                   help="skip a model's own cleanup and delete the test items by exact name instead (for models "
+                        "that can't see which item they'd delete, on a Mac with real data)")
     p.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = p.parse_args()
     for m in a.models:
@@ -105,7 +108,10 @@ def main():
         print(f"  {r['seconds']}s, {r['actions']} actions, exit {r['exit']}: {r['result']}", flush=True)
         if a.task in CHECKERS:
             r["check"] = check(a.task, stamp)
-        if a.task in FOLLOW_UPS:
+        if a.task in FOLLOW_UPS and a.no_cleanup:
+            subprocess.run([sys.executable, CHECKERS[a.task], stamp, "--clean"], cwd=PROJECT, capture_output=True)
+            r["cleanup"] = {"skipped": "deleted by the checker by exact name"}
+        elif a.task in FOLLOW_UPS:
             follow = FOLLOW_UPS[a.task].format(label=LABELS[m], stamp=stamp)
             print(f"▶ {m} cleans up: {follow}", flush=True)
             c = run(m, follow, a.timeout)
