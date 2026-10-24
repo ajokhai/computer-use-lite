@@ -38,6 +38,7 @@ class Element:
     h: int
     focused: bool = False
     context: str = ""
+    win: int = -1  # which of the app's windows it's in (-1: the menu bar, or unknown)
 
     def describe(self) -> str:
         role = self.role.removeprefix("AX")
@@ -191,6 +192,9 @@ def _load_native_lib():
                 if hasattr(lib, "cu_hotkey"):
                     lib.cu_hotkey.argtypes = [ctypes.c_char_p]
                     lib.cu_hotkey.restype = ctypes.c_bool
+                if hasattr(lib, "cu_bring_forward"):
+                    lib.cu_bring_forward.argtypes = [ctypes.c_int32]
+                    lib.cu_bring_forward.restype = ctypes.c_bool
                 if hasattr(lib, "cu_scroll"):
                     lib.cu_scroll.argtypes = [ctypes.c_int32, ctypes.c_int32]
                     lib.cu_scroll.restype = None
@@ -244,6 +248,18 @@ def _enrich_element_context(elements: list[Element]) -> list[Element]:
     return elements
 
 
+def bring_forward(el: "Element | None") -> bool:
+    """Before clicking an element of the frontmost app: bring its window forward if another
+    window covers it or it's minimized, so the click lands on it. True if a window moved."""
+    lib = _load_native_lib()
+    if el is None or el.win < 0 or not lib or not hasattr(lib, "cu_bring_forward"):
+        return False
+    try:
+        return bool(lib.cu_bring_forward(el.win))
+    except Exception:
+        return False
+
+
 def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Element]]:
     """Walk the frontmost app's AX tree and return on-screen actionable elements."""
     if _load_native_lib():
@@ -261,6 +277,7 @@ def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Eleme
                         w=e["w"],
                         h=e["h"],
                         focused=e.get("focused", False),
+                        win=e.get("win", -1),
                     )
                     for e in data.get("elements", [])
                 ]

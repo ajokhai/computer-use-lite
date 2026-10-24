@@ -47,6 +47,9 @@ pub struct NativeElement {
     pub w: i32,
     pub h: i32,
     pub focused: bool,
+    /// Which of the app's windows it's in (its index in AXWindows); -1 for the menu bar.
+    #[serde(default)]
+    pub win: i32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +139,17 @@ pub extern "C" fn cu_key_press(key_code: u16, flags: u64) {
 pub unsafe extern "C" fn cu_hotkey(keys_csv: *const c_char) -> bool {
     let Some(s) = c_str(keys_csv) else { return false };
     ffi_guard(false, || input::hotkey(&input::split_chord(s)))
+}
+
+/// Before clicking an element of the frontmost app: bring its window (`win` from the walk) forward
+/// if another window covers it or it's minimized. True if a window moved.
+#[no_mangle]
+pub extern "C" fn cu_bring_forward(win: i32) -> bool {
+    ffi_guard(false, || {
+        let pid = ax::get_frontmost_app().0;
+        let Some((window, _)) = usize::try_from(win).ok().and_then(|i| ax::app_windows(pid).into_iter().nth(i)) else { return false };
+        ax::needs_raise(pid, Some(&window)) && ax::raise(pid, Some(&window))
+    })
 }
 
 #[no_mangle]

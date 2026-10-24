@@ -390,6 +390,7 @@ fn walk_once(target: Option<(i32, String)>, max_elements: usize, keep_refs: bool
                         w: sz.width as i32,
                         h: sz.height as i32,
                         focused: focused.as_ref().is_some_and(|f| unsafe { CFEqual(f.ptr(), el.ptr()) }),
+                        win: if win_roots.get(win).is_some_and(Option::is_some) { win as i32 } else { -1 },
                     });
                     if keep_refs {
                         refs.push(el.clone());

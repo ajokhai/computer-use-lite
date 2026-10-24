@@ -22,7 +22,7 @@ from . import actions, memory, narrate, recovery, usage
 from .config import load_settings
 from . import vision
 from .jev import Jev, installed_apps, text_candidates
-from .screen import Element, ax_elements, frontmost_app
+from .screen import Element, ax_elements, bring_forward, frontmost_app
 from .vision import Vision
 from .vision.base import RISKY_WORDS, is_risky_action  # noqa: F401  (re-exported)
 
@@ -308,6 +308,7 @@ class Agent:
         if els is None:
             els = []
         if op in ("CLICK", "DOUBLE_CLICK"):
+            bring_forward(el)
             actions.click(el.x, el.y, clicks=2 if op == "DOUBLE_CLICK" else 1)
         elif op in ("TYPE", "PASTE"):
             self._focus_text_field(el)
@@ -364,6 +365,7 @@ class Agent:
         if el is not None and el.role not in TEXT_INPUT and el.role != "AXVisual":
             raise RuntimeError(f"{el.describe()} isn't a text field")
         if el is not None and not el.focused:
+            bring_forward(el)
             actions.click(el.x, el.y)
             time.sleep(0.15)
         if not _focused(ax_elements(limit=253)[1]):
@@ -416,6 +418,7 @@ class Agent:
         self.log(f"    jev → {el.describe()} p={prob:.2f}")
         self.stats["jev_steps"] += 1
         kind = s["kind"]
+        bring_forward(el)  # a window covering it would take the click
         if kind in ("click", "double_click"):
             actions.click(el.x, el.y, clicks=2 if kind == "double_click" else 1)
         elif kind == "type":

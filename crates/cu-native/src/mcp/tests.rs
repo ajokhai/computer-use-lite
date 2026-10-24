@@ -30,7 +30,7 @@ struct Fake {
 }
 
 fn el(id: &str, role: &str, label: &str, x: i32, y: i32) -> NativeElement {
-    NativeElement { id: id.into(), role: role.into(), label: label.into(), x, y, w: 40, h: 20, focused: false }
+    NativeElement { id: id.into(), role: role.into(), label: label.into(), x, y, w: 40, h: 20, focused: false, win: 0 }
 }
 
 fn fake() -> Fake {
