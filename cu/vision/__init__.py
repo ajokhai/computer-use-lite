@@ -11,7 +11,7 @@ from typing import Callable
 
 from .. import usage
 from ..config import load_settings
-from .base import CONTINUE_NOTE, VisionModel, is_risky_action  # noqa: F401
+from .base import CONTINUE_NOTE, VisionModel, is_risky_action, parse_json  # noqa: F401
 
 PROVIDERS = ("claude", "openai", "gemini", "openrouter", "local")
 LABELS = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini", "openrouter": "OpenRouter", "local": "Local model"}
@@ -162,6 +162,16 @@ class Vision:
                 if not self._switch(e):
                     raise usage.QuotaExhausted("vision", e.until, str(e)) from e
                 instruction += CONTINUE_NOTE
+
+    def ask_json(self, system: str, text: str) -> dict:
+        """One question about the current screen, answered as JSON (used to assess a failed attempt)."""
+        from ..screen import screenshot_png
+        while True:
+            try:
+                return parse_json(self.current()._json(system, text, screenshot_png()))
+            except usage.QuotaExhausted as e:
+                if not self._switch(e):
+                    raise usage.QuotaExhausted("vision", e.until, str(e)) from e
 
     @property
     def calls(self) -> int:

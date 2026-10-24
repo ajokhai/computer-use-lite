@@ -18,11 +18,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import actions, narrate, usage
+from . import actions, narrate, recovery, usage
 from .config import load_settings
 from . import vision
 from .jev import Jev, installed_apps, text_candidates
-from .screen import Element, ax_elements
+from .screen import Element, ax_elements, frontmost_app
 from .vision import Vision
 from .vision.base import RISKY_WORDS, is_risky_action  # noqa: F401  (re-exported)
 
@@ -90,6 +90,7 @@ class Agent:
     log: Callable[[str], None] = print
     narrate: Callable[[str], None] = lambda text: None  # short spoken updates while working
     max_jev_actions: int = 40
+    max_attempts: int = recovery.MAX_ATTEMPTS  # tries per task; each failure is assessed before the next
     vision: Vision | None = None
     jev: Jev | None = None
     stats: dict = field(default_factory=lambda: {"jev_steps": 0, "vision_steps": 0, "direct_steps": 0})
@@ -114,7 +115,40 @@ class Agent:
                                narrate=self.narrate, allow_risky=self.allow_risky, confirm_all=self.confirm_all)
 
     def run(self, task: str) -> str:
-        """Run the task, moving to another provider when one runs out of quota (if auto-switch is on)."""
+        """Run the task in up to `max_attempts` attempts: after a failure the agent works out what went
+        wrong, tries again differently, and remembers what it learned (cu/recovery.py, cu/memory.py)."""
+        lines: deque = deque(maxlen=80)  # recent log lines, for assessing a failed attempt
+        log = self.log
+
+        def tap(line):
+            lines.append(str(line))
+            log(line)
+
+        self.log = tap
+        try:
+            rec = recovery.Recovery(attempt=self._attempt, log_tail=lambda: list(lines), ask_json=self._ask_json,
+                                    where=_frontmost, log=tap, model=self.mode, max_attempts=self.max_attempts)
+            _ok, report = rec.run(task)
+        finally:
+            self.log = log
+        return report
+
+    def _attempt(self, task: str) -> tuple[bool, str]:
+        self._ok = None
+        report = self._run_quota(task)
+        ok = self._ok if self._ok is not None else report.lstrip().lower().startswith("done")
+        return ok, report
+
+    def _ask_json(self, system: str, text: str) -> dict | None:
+        """A vision model's look at a failed attempt, when there is one with quota left."""
+        if self.vision is None and not _vision_ok():
+            return None
+        if self.vision is None:
+            self.vision = Vision(auto_switch=self.auto_switch, log=self.log)
+        return self.vision.ask_json(system, text)
+
+    def _run_quota(self, task: str) -> str:
+        """One attempt, moving to another provider when one runs out of quota (if auto-switch is on)."""
         note = ""
         for _ in range(4):
             try:
@@ -143,7 +177,7 @@ class Agent:
         if self.mode == "jev":
             return self.run_jev(task)
         if self.mode == "vision":
-            ok, msg = self._see(task, max_turns=40)
+            self._ok, msg = self._see(task, max_turns=40)
             return self._report(msg)
 
         history: list[str] = []
@@ -156,6 +190,7 @@ class Agent:
             if status == "continue" and plan.get("summary"):
                 self.narrate(plan["summary"])
             if status == "done" or (status != "blocked" and not steps):
+                self._ok = status == "done"
                 return self._report(plan.get("summary", "done"))
             if status == "blocked":
                 return self._report(f"blocked: {plan.get('summary')}")
@@ -180,7 +215,9 @@ class Agent:
 
     def run_jev(self, task: str) -> str:
         """Jev picks op + target + text + app in one request per turn, from the AX tree."""
-        texts, apps = text_candidates(task.split("\n(Continue", 1)[0]), installed_apps()
+        hints = [f"NOTE: {n}" for n in recovery.notes_of(task)]  # lessons and retry guidance, as history Jev reads
+        task = recovery.strip_notes(task)
+        texts, apps = text_candidates(task), installed_apps()
         history: list[str] = []
         recent: deque = deque(maxlen=3)
         seen_screens: dict[str, list[str]] = {}
@@ -194,7 +231,7 @@ class Agent:
             screen_sig = f"{app}:" + ",".join(f"{e.role}:{e.label[:12]}:{e.x // 25}:{e.y // 25}" for e in els[:15])
             tried_here = seen_screens.get(screen_sig, [])
 
-            d = self.jev.decide(task, app, els, history, texts, apps, tried=tried_here)
+            d = self.jev.decide(task, app, els, hints + history, texts, apps, tried=tried_here)
             op, el = d["op"], d["element"]
             desc = _describe_op(d)
             self.log(f"  jev → {desc}  p={d['op_p']:.2f}")
@@ -422,6 +459,13 @@ def _fmt(s: dict) -> str:
 
 
 TEXT_INPUT = ("AXTextField", "AXTextArea", "AXSearchField", "AXComboBox")
+
+
+def _frontmost() -> str:
+    try:
+        return frontmost_app()[0]
+    except Exception:
+        return ""
 
 
 def _focused(els: list[Element]) -> bool:

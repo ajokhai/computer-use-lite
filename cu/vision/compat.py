@@ -115,7 +115,10 @@ class Compatible(VisionModel):
                 except (actions.pyautogui.FailSafeException, Declined):
                     raise
                 except Exception as e:
-                    history.append(f"FAILED: {json.dumps(a)} ({e})")
+                    failed = f"FAILED: {json.dumps(a)} ({e})"
+                    if history and history[-1].startswith(failed[:60]):  # the same thing failed again
+                        failed += " · this failed twice: do something different (another element, the keyboard, a URL)"
+                    history.append(failed)
                     break
             sleep(0.3, stop)
         return False, "ran out of turns"

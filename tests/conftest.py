@@ -11,7 +11,9 @@ def _no_keychain():
 
 @pytest.fixture(autouse=True)
 def _no_real_usage(tmp_path, monkeypatch):
-    """Tests count usage in a scratch folder, never in the user's real usage file."""
-    from cu import usage
+    """Tests count usage and keep lessons in a scratch folder, never in the user's real files."""
+    from cu import memory, usage
     monkeypatch.setattr(usage, "DATA", tmp_path)
     monkeypatch.setattr(usage, "FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(memory, "DATA", tmp_path)
+    monkeypatch.setattr(memory, "FILE", tmp_path / "lessons.json")
