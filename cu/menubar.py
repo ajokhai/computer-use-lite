@@ -4,6 +4,7 @@ import queue
 import re
 import subprocess
 import threading
+import time
 
 import rumps
 from AppKit import (
@@ -1166,7 +1167,9 @@ def _open(path):
 
 
 def main():
+    from . import indicator
     load_keys()
+    indicator.enable()
     MenuBar().run()
 
 

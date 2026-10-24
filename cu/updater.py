@@ -7,7 +7,6 @@ available: GITHUB_TOKEN in the environment or Keychain, or the `gh` CLI's login.
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import urllib.error
 import urllib.request

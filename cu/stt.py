@@ -48,6 +48,11 @@ def _load(model: str):
 def _load_now(model: str):
     with _load_lock:
         if model not in _models:
+            # Keep one model resident: Parakeet alone is ~2.5 GB, so switching must free the last one.
+            if _models:
+                import gc
+                _models.clear()
+                gc.collect()
             family, source = parse(model)
             if family == "parakeet":
                 from .melshim import install

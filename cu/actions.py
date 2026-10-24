@@ -19,6 +19,12 @@ KEY_ALIASES = {
 }
 
 
+def _failsafe():
+    """Abort when the mouse is in a screen corner. pyautogui only checks this inside its own
+    calls, and native input bypasses them, so every input path calls this first."""
+    pyautogui.failSafeCheck()
+
+
 def key_name(k: str) -> str:
     k = k.strip()
     return KEY_ALIASES.get(k.lower().replace("_", ""), k.lower())
@@ -28,6 +34,7 @@ def move_to(x, y, duration=0.12):
     """Smoothly glide the cursor across the screen so the user can follow along."""
     from . import indicator
     from .screen import _load_native_lib
+    _failsafe()
     indicator.show_cursor_active(x, y)
     lib = _load_native_lib()
     if lib and hasattr(lib, "cu_move_to"):
@@ -51,7 +58,7 @@ def click(x, y, button="left", clicks=1):
     indicator.show_click_ring(x, y)
     indicator.hide_cursor_active(delay=0.45)
     lib = _load_native_lib()
-    if lib and hasattr(lib, "cu_click"):
+    if lib and hasattr(lib, "cu_click") and button in ("left", "right"):
         try:
             btn_code = 1 if button == "right" else 0
             lib.cu_click(float(x), float(y), btn_code, int(clicks))
@@ -151,12 +158,13 @@ def create_new_document(app_name: str | None = None) -> bool:
 
 def hotkey(keys):
     from .screen import _load_native_lib
+    _failsafe()
     lib = _load_native_lib()
     if lib and hasattr(lib, "cu_hotkey"):
         try:
-            csv_keys = ",".join(keys).encode("utf-8")
-            lib.cu_hotkey(csv_keys)
-            return
+            # U+001F separates keys so "," can be a key; False means a key it doesn't know.
+            if lib.cu_hotkey("\x1f".join(keys).encode("utf-8")):
+                return
         except Exception:
             pass
     keys = [key_name(k) for k in keys]
@@ -172,6 +180,7 @@ def scroll(x, y, direction="down", amount=300):
     move_to(x, y, duration=0.08)
     indicator.show_click_ring(x, y)
     indicator.show_cursor_active(x, y)
+    _failsafe()
     lines = max(1, int(amount / 10))
     try:
         lib = _load_native_lib()
@@ -239,7 +248,7 @@ def quit_app(name: str | None = None):
     if name:
         subprocess.run(["osascript", "-e", f'tell application "{name}" to quit'], capture_output=True)
     else:
-        pyautogui.hotkey("command", "q")
+        hotkey(["command", "q"])
     time.sleep(0.2)
 
 

@@ -59,6 +59,14 @@ def speaking() -> bool:
     return time.time() < _busy_until
 
 
+def wait(timeout: float = 120):
+    """Block until the current speech finishes."""
+    deadline = time.time() + timeout
+    time.sleep(0.2)  # speak() may start on a thread
+    while speaking() and time.time() < deadline:
+        time.sleep(0.1)
+
+
 def stop():
     global _generation, _busy_until
     _generation += 1

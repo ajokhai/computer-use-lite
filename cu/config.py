@@ -59,8 +59,13 @@ def save_settings(s: dict):
 
 
 def get_key(name: str) -> str:
-    r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w"],
-                       capture_output=True, text=True)
+    # A process the Keychain doesn't know (e.g. an editor starting the MCP server) gets an
+    # "allow access" prompt; without a timeout an unanswered prompt hangs startup forever.
+    try:
+        r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w"],
+                           capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return ""
     return r.stdout.strip() if r.returncode == 0 else ""
 
 

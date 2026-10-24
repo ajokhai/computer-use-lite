@@ -143,8 +143,8 @@ def _load_native_lib():
             try:
                 lib = ctypes.CDLL(str(candidate))
                 lib.cu_walk_ax_tree_json.argtypes = [ctypes.c_size_t]
-                lib.cu_walk_ax_tree_json.restype = ctypes.c_char_p
-                lib.cu_free_string.argtypes = [ctypes.c_char_p]
+                lib.cu_walk_ax_tree_json.restype = ctypes.c_void_p
+                lib.cu_free_string.argtypes = [ctypes.c_void_p]
                 lib.cu_free_string.restype = None
 
                 if hasattr(lib, "cu_click"):
@@ -161,7 +161,7 @@ def _load_native_lib():
                     lib.cu_key_press.restype = None
                 if hasattr(lib, "cu_hotkey"):
                     lib.cu_hotkey.argtypes = [ctypes.c_char_p]
-                    lib.cu_hotkey.restype = None
+                    lib.cu_hotkey.restype = ctypes.c_bool
                 if hasattr(lib, "cu_scroll"):
                     lib.cu_scroll.argtypes = [ctypes.c_int32, ctypes.c_int32]
                     lib.cu_scroll.restype = None
@@ -171,42 +171,36 @@ def _load_native_lib():
                 if hasattr(lib, "cu_capture_to_file"):
                     lib.cu_capture_to_file.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_char_p]
                     lib.cu_capture_to_file.restype = ctypes.c_bool
-                if hasattr(lib, "cu_memory_find_match"):
-                    lib.cu_memory_find_match.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-                    lib.cu_memory_find_match.restype = ctypes.c_char_p
-                if hasattr(lib, "cu_memory_save_pattern"):
-                    lib.cu_memory_save_pattern.argtypes = [ctypes.c_char_p]
-                    lib.cu_memory_save_pattern.restype = ctypes.c_bool
-                if hasattr(lib, "cu_memory_list_patterns"):
-                    lib.cu_memory_list_patterns.argtypes = []
-                    lib.cu_memory_list_patterns.restype = ctypes.c_char_p
-                if hasattr(lib, "cu_memory_free_string"):
-                    lib.cu_memory_free_string.argtypes = [ctypes.c_char_p]
-                    lib.cu_memory_free_string.restype = None
-                if hasattr(lib, "cu_check_typing_safety"):
-                    lib.cu_check_typing_safety.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
-                    lib.cu_check_typing_safety.restype = ctypes.c_char_p
-                if hasattr(lib, "cu_check_doc_safety"):
-                    lib.cu_check_doc_safety.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
-                    lib.cu_check_doc_safety.restype = ctypes.c_char_p
                 if hasattr(lib, "cu_is_risky_action"):
                     lib.cu_is_risky_action.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
                     lib.cu_is_risky_action.restype = ctypes.c_bool
-                if hasattr(lib, "cu_verify_task_completion"):
-                    lib.cu_verify_task_completion.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
-                    lib.cu_verify_task_completion.restype = ctypes.c_char_p
-                if hasattr(lib, "cu_evaluate_agent_stuck"):
-                    lib.cu_evaluate_agent_stuck.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
-                    lib.cu_evaluate_agent_stuck.restype = ctypes.c_char_p
                 if hasattr(lib, "cu_extract_text_candidates"):
                     lib.cu_extract_text_candidates.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
-                    lib.cu_extract_text_candidates.restype = ctypes.c_char_p
+                    lib.cu_extract_text_candidates.restype = ctypes.c_void_p
 
                 _NATIVE_LIB = lib
                 return _NATIVE_LIB
             except Exception:
                 pass
     return None
+
+
+def native_json(name: str, *args):
+    """Call a native function that returns a JSON string, decode it and free it.
+    None when the library or function is missing, or the call returned nothing."""
+    import ctypes
+    import json
+    lib = _load_native_lib()
+    fn = getattr(lib, name, None) if lib else None
+    if fn is None:
+        return None
+    ptr = fn(*args)
+    if not ptr:
+        return None
+    try:
+        return json.loads(ctypes.string_at(ptr).decode("utf-8"))
+    finally:
+        lib.cu_free_string(ptr)
 
 
 def _enrich_element_context(elements: list[Element]) -> list[Element]:
@@ -226,13 +220,10 @@ def _enrich_element_context(elements: list[Element]) -> list[Element]:
 
 def ax_elements(limit: int = 200, timeout: float = 2.5) -> tuple[str, list[Element]]:
     """Walk the frontmost app's AX tree and return on-screen actionable elements."""
-    lib = _load_native_lib()
-    if lib:
+    if _load_native_lib():
         try:
-            import json
-            raw = lib.cu_walk_ax_tree_json(limit)
-            if raw:
-                data = json.loads(raw.decode("utf-8"))
+            data = native_json("cu_walk_ax_tree_json", limit)
+            if data:
                 app_name = data.get("app", "Unknown")
                 elements = [
                     Element(

@@ -10,10 +10,7 @@ Premium macOS command pill matching modern AI command surfaces:
 - Up-arrow submit button
 """
 
-import sys
 import threading
-import time
-from typing import Callable, Optional
 
 import objc
 from AppKit import (
@@ -23,8 +20,6 @@ from AppKit import (
     NSButton,
     NSButtonTypeMomentaryPushIn,
     NSColor,
-    NSEvent,
-    NSEventMaskKeyDown,
     NSFloatingWindowLevel,
     NSFocusRingTypeNone,
     NSFont,
@@ -40,13 +35,10 @@ from AppKit import (
     NSScreen,
     NSTextField,
     NSView,
-    NSVisualEffectBlendingModeBehindWindow,
-    NSVisualEffectMaterialHUDWindow,
-    NSVisualEffectView,
     NSWindowStyleMaskBorderless,
     NSWorkspace,
 )
-from Foundation import NSObject, NSOperationQueue, NSPoint, NSRect, NSSize
+from Foundation import NSPoint
 
 
 class BarBackgroundView(NSView):
@@ -346,43 +338,8 @@ class PromptBar:
         else:
             self.input_field.setStringValue_(f"🎙 {text}")
 
-    def onTeachAction_(self, sender):
-        self.on_teach_skill()
-
-    def on_teach_skill(self):
-        """Enter skill teaching mode."""
-        from .memory import get_memory_store, prompt_user_for_help
-
-        front = NSWorkspace.sharedWorkspace().frontmostApplication()
-        app_name = front.localizedName() if front else "Mac"
-
-        self.input_field.setStringValue_("")
-        self.set_placeholder(f"Teach skill in {app_name}: enter skill name and press Enter...")
-        self.panel.makeFirstResponder_(self.input_field)
-
-        original_submit = self.on_submit
-
-        def _do_teach():
-            skill_name = self.input_field.stringValue().strip()
-            self.on_submit = original_submit
-            if not skill_name:
-                self.set_placeholder("Ask Computer Use or type a task... (Esc to dismiss)")
-                return
-            self.hide()
-            if self.menubar:
-                self.menubar.log(f"\n🎓 Teaching skill: '{skill_name}' in {app_name}")
-                threading.Thread(
-                    target=prompt_user_for_help,
-                    args=(skill_name, app_name, "User requested skill teaching", self.menubar.log),
-                    daemon=True,
-                ).start()
-
-        self.on_submit = _do_teach
-
     def onPlusAction_(self, sender):
         menu = NSMenu.alloc().init()
-        menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Teach New Skill (⌘T)", "onTeachAction:", "t"))
-        menu.addItem_(NSMenuItem.separatorItem())
         menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(f"Toggle Voice Mode ({self._shortcut_hint()} or ⌃⌥Space)", "toggleVoiceAction:", ""))
         item_change = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Record Voice Shortcut…", "onChangeVoiceShortcutAction:", "")
         item_change.setTarget_(self)

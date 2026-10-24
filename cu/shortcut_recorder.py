@@ -4,12 +4,10 @@ or key combination, preview it live, and click 'Save Shortcut'.
 """
 
 import time
-import objc
 from AppKit import (
     NSApplication,
     NSBezierPath,
     NSButton,
-    NSButtonTypeMomentaryPushIn,
     NSColor,
     NSEvent,
     NSEventMaskFlagsChanged,
@@ -17,16 +15,12 @@ from AppKit import (
     NSFloatingWindowLevel,
     NSFont,
     NSFontWeightBold,
-    NSFontWeightMedium,
     NSFontWeightRegular,
     NSMakeRect,
     NSPanel,
     NSScreen,
     NSTextField,
     NSView,
-    NSVisualEffectBlendingModeBehindWindow,
-    NSVisualEffectMaterialHUDWindow,
-    NSVisualEffectView,
     NSWindowStyleMaskBorderless,
 )
 from Foundation import NSOperationQueue, NSPoint, NSRect

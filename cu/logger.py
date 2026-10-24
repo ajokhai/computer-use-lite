@@ -16,6 +16,16 @@ CRASH_LOG = LOG_DIR / "crash.log"
 
 _INITIALIZED = False
 _LOCK = threading.Lock()
+MAX_LOG_BYTES = 5 * 1024 * 1024  # each log keeps one rotated copy, so at most ~10 MB on disk
+
+
+def _rotate(path: Path):
+    """Move `path` to `path.1` once it passes MAX_LOG_BYTES."""
+    try:
+        if path.stat().st_size > MAX_LOG_BYTES:
+            path.replace(path.with_name(path.name + ".1"))
+    except OSError:
+        pass
 
 
 class _TeeStream:
@@ -24,6 +34,7 @@ class _TeeStream:
     def __init__(self, original_stream, log_file_path):
         self.orig = original_stream
         self.path = log_file_path
+        self._writes = 0
 
     def write(self, data):
         try:
@@ -36,9 +47,11 @@ class _TeeStream:
         try:
             if data:
                 with _LOCK:
+                    self._writes += 1
+                    if self._writes % 500 == 0:
+                        _rotate(self.path)
                     with open(self.path, "a", encoding="utf-8") as f:
                         f.write(data)
-                        f.flush()
         except Exception:
             pass
 
@@ -115,6 +128,8 @@ def setup_logging():
 
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
+        for path in (APP_LOG, CRASH_LOG):
+            _rotate(path)
         # Install exception hooks
         sys.excepthook = _uncaught_sys_exception
         if hasattr(threading, "excepthook"):

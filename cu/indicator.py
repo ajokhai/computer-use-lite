@@ -6,9 +6,8 @@
 
 import threading
 import time
-from Foundation import NSOperationQueue, NSTimer, NSPoint
+from Foundation import NSTimer, NSPoint
 from AppKit import (
-    NSApplication,
     NSAttributedString,
     NSBezierPath,
     NSColor,
@@ -27,6 +26,19 @@ from AppKit import (
 _ACTIVE_PULSES = set()
 _BEACON = None
 _BEACON_LOCK = threading.Lock()
+_ENABLED = False
+
+
+def enable():
+    """Turn the overlay on. Only the menu bar app calls this: it runs the main run loop.
+    Without one (the MCP server, the CLI) queued blocks never run and pile up in memory."""
+    global _ENABLED
+    _ENABLED = True
+
+
+def _on_main(fn):
+    if _ENABLED:
+        _on_main(fn)
 
 
 class CursorBeaconView(NSView):
@@ -153,7 +165,7 @@ def show_cursor_active(x: float, y: float):
             pass
 
     try:
-        NSOperationQueue.mainQueue().addOperationWithBlock_(_do)
+        _on_main(_do)
     except Exception:
         pass
 
@@ -168,7 +180,7 @@ def hide_cursor_active(delay: float = 0.4):
             pass
 
     try:
-        NSOperationQueue.mainQueue().addOperationWithBlock_(_do)
+        _on_main(_do)
     except Exception:
         pass
 
@@ -255,6 +267,6 @@ def show_click_ring(x: int, y: int, size: int = 64, duration: float = 0.35):
             pass
 
     try:
-        NSOperationQueue.mainQueue().addOperationWithBlock_(_create)
+        _on_main(_create)
     except Exception:
         pass

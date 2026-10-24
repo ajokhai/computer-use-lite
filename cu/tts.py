@@ -2,7 +2,6 @@
 The model (92 MB, 8-bit) and voices (28 MB) download to Application Support the first time they're used."""
 
 import urllib.request
-from pathlib import Path
 
 from .config import DATA
 from .voicepack import KOKORO_VOICES  # noqa: F401  (kept here for callers)

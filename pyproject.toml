@@ -8,7 +8,6 @@ dependencies = [
     "google-genai>=2.31.0",
     "httpx>=0.28.1",
     "kokoro-onnx>=0.6.1",
-    "mcp>=2.3.0",
     "parakeet-mlx>=0.5.3",
     "pillow>=13.0.0",
     "pyautogui>=0.9.54",
@@ -30,4 +29,9 @@ package = false
 [dependency-groups]
 dev = [
     "pyinstaller>=6.22.3",
+    "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

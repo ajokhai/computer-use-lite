@@ -196,6 +196,8 @@ class Gemini:
                 try:
                     run(name, args, X, Y)
                     out = {"status": "ok", **extra}
+                except actions.pyautogui.FailSafeException:
+                    raise
                 except Exception as e:  # report back so the model can recover
                     out = {"status": "error", "error": str(e), **extra}
                 results.append((name, _get(call, "id"), out))

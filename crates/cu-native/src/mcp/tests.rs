@@ -1,0 +1,359 @@
+//! The MCP server against a fake desktop: protocol, every tool, and the safety rules.
+//! Nothing here touches the real Mac.
+
+use std::time::Duration;
+
+use serde_json::{json, Value};
+
+use super::*;
+use crate::ax::WindowInfo;
+use crate::capture::Shot;
+
+#[derive(Default)]
+struct Fake {
+    app: String,
+    els: Vec<NativeElement>,
+    texts: Vec<String>,
+    log: Vec<String>,
+    corner: bool,
+    hotkey_ok: bool,
+    /// Elements to switch to after this many `elements()` calls (for wait_for_change).
+    later: Option<(usize, Vec<NativeElement>)>,
+    walks: usize,
+}
+
+fn el(id: &str, role: &str, label: &str, x: i32, y: i32) -> NativeElement {
+    NativeElement { id: id.into(), role: role.into(), label: label.into(), x, y, w: 40, h: 20, focused: false }
+}
+
+fn fake() -> Fake {
+    Fake {
+        app: "Mail".into(),
+        els: vec![
+            el("e0", "AXButton", "Send", 100, 50),
+            el("e1", "AXTextField", "To:", 300, 80),
+            el("e2", "AXTextArea", "Hi Bob, the report is attached.", 300, 300),
+            el("e3", "AXButton", "Reply", 500, 200),
+            el("e4", "AXStaticText", "Quarterly numbers", 500, 170),
+        ],
+        texts: vec!["Send".into(), "".into(), "Hi Bob, the report is attached. Full text here.".into(), "Reply".into(), "Quarterly numbers".into()],
+        hotkey_ok: true,
+        ..Default::default()
+    }
+}
+
+impl Desktop for Fake {
+    fn main_display(&self) -> (f64, f64) {
+        (2560.0, 1600.0) // wider than the default screenshot: scale 2
+    }
+    fn on_screen(&self, x: f64, y: f64) -> bool {
+        (0.0..2560.0).contains(&x) && (0.0..1600.0).contains(&y)
+    }
+    fn elements(&mut self, limit: usize) -> (String, Vec<NativeElement>) {
+        self.walks += 1;
+        if let Some((after, next)) = &self.later {
+            if self.walks > *after {
+                self.els = next.clone();
+            }
+        }
+        (self.app.clone(), self.els.iter().take(limit).cloned().collect())
+    }
+    fn read_element(&mut self, index: usize) -> Option<String> {
+        self.texts.get(index).cloned()
+    }
+    fn screenshot(&mut self, max_width: u32) -> Result<Shot, String> {
+        let w = max_width.min(2560);
+        Ok(Shot { png: vec![0x89, b'P', b'N', b'G'], width: w, height: w * 10 / 16, scale: 2560.0 / w as f64 })
+    }
+    fn click(&mut self, x: f64, y: f64, button: Button, clicks: usize) {
+        self.log.push(format!("click {x},{y} {button:?} x{clicks}"));
+    }
+    fn move_mouse(&mut self, x: f64, y: f64) {
+        self.log.push(format!("move {x},{y}"));
+    }
+    fn drag(&mut self, from: (f64, f64), to: (f64, f64)) {
+        self.log.push(format!("drag {from:?} {to:?}"));
+    }
+    fn scroll(&mut self, x: f64, y: f64, dy: i32, dx: i32) {
+        self.log.push(format!("scroll {x},{y} {dy} {dx}"));
+    }
+    fn type_text(&mut self, text: &str) {
+        self.log.push(format!("type {text}"));
+    }
+    fn hotkey(&mut self, keys: &[&str]) -> bool {
+        self.log.push(format!("keys {}", keys.join("+")));
+        self.hotkey_ok
+    }
+    fn open_app(&mut self, name: &str) -> Result<String, String> {
+        if name == "Nope" { Err("no app named \"Nope\"".into()) } else { Ok(format!("opened {name}")) }
+    }
+    fn open_url(&mut self, url: &str) -> Result<(), String> {
+        self.log.push(format!("url {url}"));
+        Ok(())
+    }
+    fn select_menu(&mut self, path: &[&str]) -> Result<String, String> {
+        self.log.push(format!("menu {}", path.join("|")));
+        Ok(path.join(" > "))
+    }
+    fn windows(&mut self) -> Vec<WindowInfo> {
+        vec![WindowInfo { app: "Mail".into(), pid: 1, title: "Inbox".into(), x: 0, y: 0, w: 2000, h: 1200 }]
+    }
+    fn mouse_in_corner(&self) -> bool {
+        self.corner
+    }
+    fn frontmost(&self) -> String {
+        self.app.clone()
+    }
+    fn sleep(&mut self, _d: Duration) {}
+    fn speak(&mut self, text: &str) -> Result<(), String> {
+        self.log.push(format!("say {text}"));
+        Ok(())
+    }
+    fn run_task(&mut self, task: &str, mode: &str, allow_risky: bool) -> Result<String, String> {
+        Ok(format!("ran {task:?} mode={mode} risky={allow_risky}"))
+    }
+    fn permissions(&self) -> (bool, bool) {
+        (true, false)
+    }
+}
+
+fn call(s: &mut Server<Fake>, name: &str, args: Value) -> (String, bool, Value) {
+    let r = s.handle(&json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": name, "arguments": args}})).unwrap();
+    let res = r["result"].clone();
+    let text = res["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+    (text, res["isError"].as_bool().unwrap(), res)
+}
+
+fn server() -> Server<Fake> {
+    Server::new(fake())
+}
+
+#[test]
+fn initialize_negotiates_version_and_lists_tools() {
+    let mut s = server();
+    let r = s.handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t"}}})).unwrap();
+    assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
+    assert_eq!(r["result"]["serverInfo"]["name"], SERVER_NAME);
+    assert!(r["result"]["capabilities"]["tools"].is_object());
+    let r = s.handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}})).unwrap();
+    assert!(PROTOCOL_VERSIONS.contains(&r["result"]["protocolVersion"].as_str().unwrap()));
+
+    assert!(s.handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
+    let r = s.handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
+    let tools = r["result"]["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    for want in ["take_screenshot", "list_screen_elements", "click_element", "click_at", "type_text", "press_keys",
+                 "scroll", "drag", "move_mouse", "open_app", "open_url", "select_menu", "read_element",
+                 "list_windows", "wait_for_change", "speak", "computer_task", "check_permissions"] {
+        assert!(names.contains(&want), "missing {want}");
+    }
+    for t in tools {
+        assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
+        for req in t["inputSchema"]["required"].as_array().unwrap() {
+            assert!(t["inputSchema"]["properties"].get(req.as_str().unwrap()).is_some(), "{} requires undeclared {req}", t["name"]);
+        }
+        assert!(t["description"].as_str().unwrap().len() > 10);
+    }
+}
+
+#[test]
+fn protocol_errors() {
+    let mut s = server();
+    let r = s.handle(&json!({"jsonrpc": "2.0", "id": 3, "method": "nope"})).unwrap();
+    assert_eq!(r["error"]["code"], -32601);
+    let r = s.handle(&json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "nope"}})).unwrap();
+    assert_eq!(r["error"]["code"], -32602);
+    assert_eq!(s.handle(&json!({"jsonrpc": "2.0", "id": 5, "method": "ping"})).unwrap()["result"], json!({}));
+
+    let input = b"not json\n\n[1,2]\n{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\"}\n";
+    let mut out = Vec::new();
+    s.serve(&input[..], &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["error"]["code"], -32700);
+    assert_eq!(lines[1]["error"]["code"], -32600);
+    assert_eq!(lines[2]["id"], 9);
+}
+
+#[test]
+fn oversized_requests_are_dropped_not_buffered() {
+    let mut s = server();
+    let mut input = vec![b'x'; MAX_LINE + 10];
+    input.extend_from_slice(b"\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+    let mut out = Vec::new();
+    s.serve(&input[..], &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains("too large"));
+    assert!(lines[1].contains("\"id\":1"));
+}
+
+#[test]
+fn coordinates_are_screenshot_pixels_both_ways() {
+    let mut s = server(); // 2560-point display, 1280-pixel default screenshot: scale 2
+    let (text, err, _) = call(&mut s, "list_screen_elements", json!({}));
+    assert!(!err);
+    assert!(text.contains("e0 Button \"Send\" at (50,25)"), "{text}");
+    call(&mut s, "click_at", json!({"x": 50, "y": 25}));
+    assert_eq!(s.desk.log.last().unwrap(), "click 100,50 Left x1");
+
+    let (_, _, res) = call(&mut s, "take_screenshot", json!({"max_width": 640}));
+    assert_eq!(res["content"][0]["type"], "image");
+    assert_eq!(res["content"][0]["mimeType"], "image/png");
+    call(&mut s, "click_at", json!({"x": 10, "y": 10, "double": true, "button": "right"}));
+    assert_eq!(s.desk.log.last().unwrap(), "click 40,40 Right x2");
+}
+
+#[test]
+fn click_element_by_id_and_description() {
+    let mut s = server();
+    call(&mut s, "list_screen_elements", json!({}));
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "e3"}));
+    assert!(!err && text.contains("Reply"), "{text}");
+    assert_eq!(s.desk.log.last().unwrap(), "click 500,200 Left x1");
+
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "the Send button"}));
+    assert!(!err, "{text}");
+    assert_eq!(s.desk.log.last().unwrap(), "click 100,50 Left x1");
+
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "e99"}));
+    assert!(err && text.contains("list_screen_elements"), "{text}");
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "Purchase subscription"}));
+    assert!(err && text.contains("no element matches"), "{text}");
+}
+
+#[test]
+fn context_disambiguates_short_labels() {
+    let mut s = server();
+    let (text, _, _) = call(&mut s, "list_screen_elements", json!({}));
+    assert!(text.contains("Reply\" (near 'Quarterly numbers')"), "{text}");
+}
+
+#[test]
+fn match_scores_rank_sensibly() {
+    let els = fake().els;
+    assert_eq!(best_match("Send", &els).unwrap().0, 0);
+    assert_eq!(best_match("send button", &els).unwrap().0, 0);
+    assert_eq!(best_match("To field", &els).unwrap().0, 1);
+    assert_eq!(best_match("reply", &els).unwrap().0, 3);
+    assert!(best_match("zzzz", &els).is_none());
+    assert!(similarity("kitten", "sitting") > 0.5 && similarity("abc", "xyz") == 0.0);
+}
+
+#[test]
+fn type_text_focuses_clears_and_submits() {
+    let mut s = server();
+    let (text, err, _) = call(&mut s, "type_text", json!({"text": "Grüße 🎉\nline two", "element": "To:", "clear_first": true, "press_enter": true}));
+    assert!(!err, "{text}");
+    assert_eq!(s.desk.log, vec!["click 300,80 Left x1", "keys command+a", "keys delete", "type Grüße 🎉\nline two", "keys return"]);
+    let (text, err, _) = call(&mut s, "type_text", json!({"text": "x".repeat(MAX_TEXT + 1)}));
+    assert!(err && text.contains("in parts"));
+}
+
+#[test]
+fn unknown_keys_are_reported_not_guessed() {
+    let mut s = server();
+    s.desk.hotkey_ok = false;
+    let (text, err, _) = call(&mut s, "press_keys", json!({"keys": ["command", "mystery"]}));
+    assert!(err && text.contains("didn't press anything"), "{text}");
+    let (_, err, _) = call(&mut s, "press_keys", json!({"keys": []}));
+    assert!(err);
+}
+
+#[test]
+fn emergency_stop_blocks_every_acting_tool() {
+    let mut s = server();
+    s.desk.corner = true;
+    for (name, args) in [
+        ("click_element", json!({"element": "Send"})),
+        ("click_at", json!({"x": 1, "y": 1})),
+        ("type_text", json!({"text": "hi"})),
+        ("press_keys", json!({"keys": ["return"]})),
+        ("scroll", json!({"direction": "down"})),
+        ("drag", json!({"from_x": 1, "from_y": 1, "to_x": 2, "to_y": 2})),
+        ("move_mouse", json!({"x": 1, "y": 1})),
+        ("open_app", json!({"name": "Notes"})),
+        ("open_url", json!({"url": "https://example.com"})),
+        ("select_menu", json!({"path": "File > New"})),
+        ("computer_task", json!({"task": "x"})),
+    ] {
+        let (text, err, _) = call(&mut s, name, args);
+        assert!(err && text.contains("emergency stop"), "{name}: {text}");
+    }
+    assert!(s.desk.log.is_empty(), "{:?}", s.desk.log);
+    // Looking is still allowed.
+    let (_, err, _) = call(&mut s, "list_screen_elements", json!({}));
+    assert!(!err);
+}
+
+#[test]
+fn off_screen_points_are_refused() {
+    let mut s = server();
+    let (text, err, _) = call(&mut s, "click_at", json!({"x": 5000, "y": 10}));
+    assert!(err && text.contains("off every screen"));
+    assert!(s.desk.log.is_empty());
+}
+
+#[test]
+fn menus_scroll_drag_urls_and_apps() {
+    let mut s = server();
+    let (_, err, _) = call(&mut s, "select_menu", json!({"path": "Format › Font > Bold"}));
+    assert!(!err);
+    assert_eq!(s.desk.log.last().unwrap(), "menu Format|Font|Bold");
+
+    call(&mut s, "scroll", json!({"direction": "down", "amount": 3}));
+    assert_eq!(s.desk.log.last().unwrap(), "scroll 1280,800 -3 0");
+    call(&mut s, "drag", json!({"from_x": 10, "from_y": 20, "to_x": 30, "to_y": 40}));
+    assert_eq!(s.desk.log.last().unwrap(), "drag (20.0, 40.0) (60.0, 80.0)");
+
+    let (_, err, _) = call(&mut s, "open_url", json!({"url": "-a Terminal"}));
+    assert!(err);
+    let (_, err, _) = call(&mut s, "open_url", json!({"url": "https://example.com"}));
+    assert!(!err);
+    let (text, err, _) = call(&mut s, "open_app", json!({"name": "Nope"}));
+    assert!(err && text.contains("no app"));
+}
+
+#[test]
+fn read_element_returns_full_text() {
+    let mut s = server();
+    let (text, err, _) = call(&mut s, "read_element", json!({"element": "report is attached"}));
+    assert!(!err);
+    assert!(text.contains("Full text here"), "{text}");
+}
+
+#[test]
+fn wait_for_change_notices_new_elements() {
+    let mut s = server();
+    s.desk.later = Some((3, vec![el("e0", "AXButton", "OK", 10, 10)]));
+    let (text, err, _) = call(&mut s, "wait_for_change", json!({"timeout_seconds": 5}));
+    assert!(!err && text.starts_with("changed"), "{text}");
+    let mut s = server();
+    let (text, _, _) = call(&mut s, "wait_for_change", json!({"timeout_seconds": 0.5}));
+    assert!(text.starts_with("no change"), "{text}");
+}
+
+#[test]
+fn windows_tasks_speech_permissions() {
+    let mut s = server();
+    let (text, _, _) = call(&mut s, "list_windows", json!({}));
+    assert!(text.contains("Mail \"Inbox\" at (0,0) size 1000x600"), "{text}");
+    let (text, err, _) = call(&mut s, "computer_task", json!({"task": "tidy desktop", "mode": "jev"}));
+    assert!(!err && text.contains("mode=jev risky=false"), "{text}");
+    let (_, err, _) = call(&mut s, "computer_task", json!({"task": "x", "mode": "wild"}));
+    assert!(err);
+    call(&mut s, "speak", json!({"text": "on it"}));
+    assert_eq!(s.desk.log.last().unwrap(), "say on it");
+    let (text, _, _) = call(&mut s, "check_permissions", json!({}));
+    assert!(text.contains("Screen Recording (screenshots, window titles): NO"), "{text}");
+}
+
+#[test]
+fn missing_arguments_are_tool_errors_not_crashes() {
+    let mut s = server();
+    for name in ["click_element", "click_at", "type_text", "press_keys", "drag", "open_app", "select_menu", "read_element", "speak", "computer_task"] {
+        let (text, err, _) = call(&mut s, name, json!({}));
+        assert!(err, "{name}: {text}");
+    }
+}

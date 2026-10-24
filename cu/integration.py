@@ -33,12 +33,18 @@ def app_bundle() -> Path | None:
     return None
 
 
-def mcp_command() -> dict:
+def mcp_binary() -> Path:
+    """The native MCP server: bundled in the app, or built in the development checkout."""
     bundle = app_bundle()
     if bundle:
-        return {"command": str(bundle / "Contents" / "MacOS" / bundle.stem), "args": ["--mcp"]}
-    uv = Path.home() / ".local" / "bin" / "uv"
-    return {"command": str(uv), "args": ["run", "--directory", str(PROJECT), "python", "-m", "cu.mcp_server"]}
+        for p in (bundle / "Contents" / "Frameworks" / "cu-mcp", bundle / "Contents" / "MacOS" / "cu-mcp"):
+            if p.is_file():
+                return p
+    return PROJECT / "crates" / "cu-native" / "target" / "release" / "cu-mcp"
+
+
+def mcp_command() -> dict:
+    return {"command": str(mcp_binary()), "args": []}
 
 
 # --- open at login ---------------------------------------------------------

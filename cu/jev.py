@@ -182,21 +182,14 @@ class Jev:
             return None, prob
         return next((e for e in elements if e.id == pick), None), prob
 
-    def check(self, task: str, app: str, elements: list[Element], history: list[str] | None = None,
-              clipboard: str | None = None) -> float:
+    def check(self, task: str, app: str, elements: list[Element], history: list[str] | None = None) -> float:
         """Probability that the task has been achieved given the execution history and current screen state."""
-        import subprocess
-        if clipboard is None:
-            try:
-                clipboard = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=0.5).stdout.strip()
-            except Exception:
-                clipboard = ""
         state = {
             "task": task,
             "frontmost_app": app,
             "actions_completed": history[-10:] if history else [],
             "elements": [e.describe() for e in elements[:160]],
-            "clipboard_content": clipboard[:300] if clipboard else "(empty)",
+            "clipboard_has_content": _clipboard_has_content(),
         }
         answers = self.ask(state, {
             "ok": {
@@ -212,17 +205,13 @@ class Jev:
     def decide(self, task: str, app: str, elements: list[Element], history: list[str],
                texts: list[str], apps: list[str], tried: list[str] | None = None) -> dict:
         """One request: the most probable next operation, its target, what to type, which app."""
-        import subprocess
         elements = elements[: MAX_OPTIONS - 2]
         focused = next((e.describe() for e in elements if e.focused), "nothing")
-        try:
-            clipboard = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=0.5).stdout.strip()
-        except Exception:
-            clipboard = ""
+        has_clip = _clipboard_has_content()
 
         # Filter out actions that cannot be executed in this state (anti-stall pattern)
         active_ops = dict(OPS)
-        if not clipboard or clipboard == "(empty)":
+        if not has_clip:
             active_ops.pop("PASTE", None)
         if not texts:
             active_ops.pop("TYPE", None)
@@ -231,7 +220,7 @@ class Jev:
             "task": task,
             "frontmost_app": app,
             "focused_element": focused,
-            "clipboard_content": clipboard[:300] if clipboard else "(empty)",
+            "clipboard_has_content": has_clip,
             "actions_so_far": history[-10:] or ["none yet"],
             "already_tried_on_this_screen": list(tried or []),
         }
@@ -284,20 +273,25 @@ class Jev:
         return self.input_tokens * 0.042 / 1e6
 
 
+def _clipboard_has_content() -> bool:
+    """Whether the clipboard holds anything. Its contents never leave the Mac:
+    they may be a password or anything else the user copied."""
+    try:
+        from AppKit import NSPasteboard
+        return bool(NSPasteboard.generalPasteboard().types())
+    except Exception:
+        return False
+
+
 def text_candidates(task: str, limit: int = 60) -> list[str]:
     """Phrases from the task Jev may choose to type (native Rust backend with Python fallback)."""
-    from .screen import _load_native_lib
-    lib = _load_native_lib()
-    if lib and hasattr(lib, "cu_extract_text_candidates"):
-        try:
-            import json
-            raw = lib.cu_extract_text_candidates(task.encode("utf-8"), limit)
-            if raw:
-                cands = json.loads(raw.decode("utf-8"))
-                if cands:
-                    return cands
-        except Exception:
-            pass
+    from .screen import native_json
+    try:
+        cands = native_json("cu_extract_text_candidates", task.encode("utf-8"), limit)
+        if cands:
+            return cands
+    except Exception:
+        pass
 
     # 0. URLs and domains (highest priority for browser/navigation tasks)
     urls = re.findall(r'https?://[^\s,;"\']+|www\.[^\s,;"\']+|\b[a-zA-Z0-9-]+\.(?:com|org|net|io|ai|dev|co|edu|gov|xyz)(?:/[^\s,;"\']*)?', task)

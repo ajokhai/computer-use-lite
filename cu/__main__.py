@@ -1,7 +1,6 @@
 """CLI: uv run python -m cu "task"   |   --doctor   |   --elements"""
 
 import argparse
-from pathlib import Path
 import sys
 
 from cu.config import load_keys
