@@ -146,7 +146,7 @@ Live runs on a real Mac (October 2026), checked by hand or by script, not by the
 
 | Model | How | Make (6 parts) | Clean up | Time |
 |---|---|---|---|---|
-| Claude Opus 5.5 | through `cu-mcp`, no API key | 6/6 | Everything it made is gone, and the note, reminder and event counts are right. Flagged: 24 Desktop screenshots went to the Trash about 6 minutes after the run's own delete; no agent's log shows how, and it's being looked into. | 5 min to make |
+| Claude Opus 5.5 | through `cu-mcp`, no API key | 6/6 | 2/2: everything it made is gone, and nothing else (the check also flagged 24 screenshots the owner deleted by hand meanwhile) | 5 min to make |
 
 More models are on the way.
 
@@ -161,7 +161,7 @@ Each run's surprises became a fix in the code or a lesson in memory, so the next
 - **Screenshots took 30 seconds** for the installed app on an external display. Fixed: after 5 seconds it switches to another capture method.
 - **"Close all the X tabs" closed the wrong tabs and missed some.** With no vision model left, Jev, which reads no screenshots and can't tell which tab is which, closed whatever was in front. Fixed: an unsure "done" now needs a clearly confident check, and the retry advice fits the task ("check none are left") instead of talking about Post buttons.
 - **The working icon** turned black instead of orange and switched off while an AI was thinking. Fixed: it's drawn in color and stays on for the whole task.
-- **The cleanup check caught files leaving the Desktop** that weren't part of the test (they were in the Trash, not lost). That's what it's for: a careless cleanup can't pass by deleting more than it should.
+- **The cleanup check flagged files leaving the Desktop** that weren't part of the test. The owner had deleted them by hand mid-run, and the check can't yet tell a person's changes from the agent's. Next: the app records real clicks and keys while an agent works (they're distinguishable from the agent's), and the check uses that.
 - **The checker had bugs too:** deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now counts both correctly.
 
 ## Ports
