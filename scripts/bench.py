@@ -55,6 +55,32 @@ FOLLOW_UPS = {
 }
 # How a task is checked: a script given the stamp (and --cleaned for a follow-up), exit 0 = all passed.
 CHECKERS = {"desk": "scripts/check_desk.py"}
+# Apps a task may open. Whatever wasn't running before a run is quit after it, whatever the model did.
+APPS = {"desk": ("Calculator", "Notes", "Reminders", "Calendar", "TextEdit")}
+
+
+def running(apps) -> set:
+    def up(a):
+        p = subprocess.run(["osascript", "-e", f'application "{a}" is running'], capture_output=True, text=True)
+        return p.stdout.strip() == "true"
+    return {a for a in apps if up(a)}
+
+
+def tidy(task: str, stamp: str, before: set):
+    """After every run: delete anything carrying the stamp, quit the apps the run opened, and close Finder
+    windows left on the test folder. Always runs, so a failed or timed-out model leaves nothing behind."""
+    if task in CHECKERS:
+        subprocess.run([sys.executable, CHECKERS[task], stamp, "--clean"], cwd=PROJECT, capture_output=True, timeout=900)
+    for a in sorted(set(APPS.get(task, ())) - before):
+        quit_ = f'tell application "{a}" to quit' + (" saving no" if a == "TextEdit" else "")
+        subprocess.run(["osascript", "-e", quit_], capture_output=True, timeout=60)
+    subprocess.run(["osascript", "-e", f'''tell application "Finder"
+        repeat with w in (every Finder window)
+            try
+                if (POSIX path of (target of w as alias)) contains "{stamp}" then close w
+            end try
+        end repeat
+    end tell'''], capture_output=True, timeout=60)
 
 
 def check(name: str, stamp: str, *flags: str) -> dict:
@@ -103,14 +129,14 @@ def main():
     for m in a.models:
         stamp = time.strftime("%H%M%S")  # unique per run, so a check can't be fooled by leftovers
         task = TASKS[a.task].format(label=LABELS[m], stamp=stamp)
+        before = running(APPS.get(a.task, ()))
         print(f"▶ {m} [stamp {stamp}]: {task}", flush=True)
         r = run(m, task, a.timeout) | {"stamp": stamp}
         print(f"  {r['seconds']}s, {r['actions']} actions, exit {r['exit']}: {r['result']}", flush=True)
         if a.task in CHECKERS:
             r["check"] = check(a.task, stamp)
         if a.task in FOLLOW_UPS and a.no_cleanup:
-            subprocess.run([sys.executable, CHECKERS[a.task], stamp, "--clean"], cwd=PROJECT, capture_output=True)
-            r["cleanup"] = {"skipped": "deleted by the checker by exact name"}
+            r["cleanup"] = {"skipped": "the model didn't clean up; tidy() deleted its items by the run's stamp"}
         elif a.task in FOLLOW_UPS:
             follow = FOLLOW_UPS[a.task].format(label=LABELS[m], stamp=stamp)
             print(f"▶ {m} cleans up: {follow}", flush=True)
@@ -118,6 +144,8 @@ def main():
             print(f"  {c['seconds']}s, {c['actions']} actions, exit {c['exit']}: {c['result']}", flush=True)
             r["cleanup"] = {k: c[k] for k in ("seconds", "actions", "exit", "result", "void")} | {
                 "check": check(a.task, stamp, "--cleaned")}
+        tidy(a.task, stamp, before)
+        r["left_behind"] = sorted(running(APPS.get(a.task, ())) - before)
         with open(a.out, "a") as f:
             f.write(json.dumps(r) + "\n")
         time.sleep(3)  # let the screen settle between runs
