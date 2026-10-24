@@ -29,7 +29,7 @@ DEFAULTS = {
     "auto_update": True,  # install new releases when idle
     "last_version": "",
     "hands_free": False,  # always listening for "Computer, …"
-    "shortcut": None,  # opens the bar; None = double-tap Control (see cu/shortcut.py)
+    "shortcut": None,  # opens the bar; None = double-tap Option (see cu/shortcut.py)
     "open_listening": False,  # the bar starts listening when the shortcut opens it (otherwise: typing)
     "recent_tasks": [],  # newest first; Up/Down in the bar steps through them
     "speak_replies": True,

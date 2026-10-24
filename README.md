@@ -40,7 +40,7 @@ Pick one under **Mode**. Modes are named by role. The vision model can be Claude
 **Jev Only:** Jev works from text only and doesn't generate text. Each turn, the app reads the accessibility tree of the frontmost app. In a single request, Jev chooses the next action, the element it applies to, the phrase from your task to type, and the installed app to open. Put text you want typed in quotes, or after words like *saying*, *titled* or *search for*.
 
 ## The bar
-One shortcut opens a floating bar. The default is **double-tap Control**. Change it in **Settings › Shortcut**: pick a preset (double-tap Option, Command, Shift or Fn) or choose **Record Shortcut…** to record a key combination.
+One shortcut opens a floating bar. The default is **double-tap Option** (double-tap Control also starts macOS Dictation, so if you had it and Dictation is on, the app moves you to Option once and tells you). Change it in **Settings › Shortcut**: pick a preset (double-tap Control, Command, Shift or Fn) or choose **Record Shortcut…** to record a key combination.
 
 - **Double-tap** opens the bar at the bottom of the screen, ready to type; double-tap again closes it.
 - **Double-tap and hold** the second tap: it listens while you hold, and sends what it heard when you let go.

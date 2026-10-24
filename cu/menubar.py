@@ -20,7 +20,7 @@ from AppKit import (
 
 from . import __version__, integration, onboarding, replies, say, updater, usage, voicepack
 from .config import DATA, LOG, load_keys, load_settings, save_settings
-from .shortcut import PRESETS, Detector, Shortcut
+from .shortcut import DEFAULT, PRESETS, Detector, Shortcut, clashes_with_dictation
 from .logger import CRASH_LOG, rotate, setup_logging
 
 setup_logging()
@@ -149,6 +149,7 @@ class MenuBar(rumps.App):
         timer.stop()
         NSApplication.sharedApplication().setActivationPolicy_(1)  # menu bar only, no Dock icon
         self._icon = None  # pump() paints it
+        self._avoid_dictation_clash()
         self._install_hotkey()
         if not self.settings.get("onboarded") or onboarding.missing_required():
             self.show_setup()
@@ -619,8 +620,10 @@ class MenuBar(rumps.App):
         if self.shortcut_menu._menu is not None and len(self.shortcut_menu):
             self.shortcut_menu.clear()
         current = self.shortcut()
+        dictation = dictation_on()
         for s in (PRESETS if current in PRESETS else [*PRESETS, current]):
-            item = rumps.MenuItem(s.title, callback=lambda _, s=s: self.set_shortcut(s))
+            title = s.title + (" (also starts Dictation)" if clashes_with_dictation(s, dictation) else "")
+            item = rumps.MenuItem(title, callback=lambda _, s=s: self.set_shortcut(s))
             item.state = s == current
             self.shortcut_menu.add(item)
         self.shortcut_menu.add(rumps.separator)
@@ -636,6 +639,19 @@ class MenuBar(rumps.App):
         save_settings(self.settings)
         self.refresh()
         self._install_hotkey()
+
+    def _avoid_dictation_clash(self):
+        """Double-tap Control also starts macOS Dictation. Move off it once, and say so;
+        picking it again afterwards is the user's call."""
+        if self.settings.get("dictation_checked"):
+            return
+        self.settings["dictation_checked"] = True
+        if clashes_with_dictation(self.shortcut(), dictation_on()):
+            self.settings["shortcut"] = DEFAULT.to_setting()
+            self.settings.pop("voice_shortcut", None)
+            rumps.notification("Computer Use", f"Shortcut is now {DEFAULT.title}",
+                               "Double-tap Control also starts Dictation. Change it in Settings › Shortcut.")
+        save_settings(self.settings)
 
     def _install_hotkey(self):
         """Key shortcuts go through Carbon (swallowed system-wide); double-taps are spotted
@@ -1178,6 +1194,14 @@ def _typed_by_an_agent(event) -> bool:
         return False
     name = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout.strip()
     return name.endswith("cu-mcp")
+
+
+def dictation_on() -> bool:
+    try:
+        from CoreFoundation import CFPreferencesCopyAppValue
+        return bool(CFPreferencesCopyAppValue("Dictation Enabled", "com.apple.assistant.support"))
+    except Exception:
+        return False
 
 
 def _short(s: str, n: int = 40) -> str:

@@ -1,4 +1,4 @@
-"""The one global shortcut that opens Computer Use: a double-tapped modifier (⌃⌃), or a key
+"""The one global shortcut that opens Computer Use: a double-tapped modifier (⌥⌥), or a key
 with or without modifiers (F5, ⌥Space, ⌘⇧K). Plain logic, no AppKit, so it's testable with
 made-up events; menubar.py feeds it real ones."""
 
@@ -78,10 +78,12 @@ class Shortcut:
         return Shortcut("key", mods, key_code, label) if label else None
 
 
-DEFAULT = Shortcut("double_tap", CTRL)
+# Not Control: double-tap Control also starts macOS Dictation, which then types into the focused field.
+DEFAULT = Shortcut("double_tap", OPT)
+DICTATION = Shortcut("double_tap", CTRL)
 PRESETS = [
     DEFAULT,
-    Shortcut("double_tap", OPT),
+    DICTATION,
     Shortcut("double_tap", CMD),
     Shortcut("double_tap", SHIFT),
     Shortcut("double_tap", FN),
@@ -89,6 +91,10 @@ PRESETS = [
     Shortcut("key", CTRL | OPT, 49, "Space"),
     Shortcut("key", 0, 96, "F5"),
 ]
+
+
+def clashes_with_dictation(s: Shortcut, dictation_on: bool) -> bool:
+    return dictation_on and s == DICTATION
 
 
 class Detector:

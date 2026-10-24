@@ -1,6 +1,6 @@
 """Shortcut detection with made-up key events: what fires, what doesn't, and old settings."""
 
-from cu.shortcut import CMD, CTRL, DEFAULT, FN, OPT, SHIFT, Detector, Shortcut
+from cu.shortcut import CMD, CTRL, DEFAULT, FN, OPT, SHIFT, Detector, Shortcut, clashes_with_dictation
 
 
 def gestures(d: Detector, events):
@@ -60,7 +60,7 @@ def test_key_shortcuts_need_exact_modifiers():
 
 
 def test_labels():
-    assert DEFAULT.label == "⌃⌃" and DEFAULT.title == "Double-tap Control"
+    assert DEFAULT.label == "⌥⌥" and DEFAULT.title == "Double-tap Option"
     assert Shortcut("key", CMD | SHIFT | CTRL, 40, "K").label == "⌃⇧⌘K"
     assert Shortcut("key", 0, 96, "F5").title == "F5"
 
@@ -88,3 +88,10 @@ def test_system_hotkey_registers_and_releases():
     assert hotkey.register(111, CTRL | OPT | CMD, lambda: None) is True
     hotkey.unregister()
     assert hotkey._registered is None
+
+
+def test_the_default_avoids_dictation():
+    assert not clashes_with_dictation(DEFAULT, True)
+    assert clashes_with_dictation(Shortcut("double_tap", CTRL), True)
+    assert not clashes_with_dictation(Shortcut("double_tap", CTRL), False)
+
