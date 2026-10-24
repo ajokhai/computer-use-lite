@@ -14,6 +14,9 @@ from AppKit import (
     NSEvent,
     NSEventMaskFlagsChanged,
     NSEventMaskKeyDown,
+    NSEventMaskLeftMouseDown,
+    NSEventMaskRightMouseDown,
+    NSEventMaskScrollWheel,
     NSImage,
     NSImageSymbolConfiguration,
     NSWorkspace,
@@ -42,6 +45,11 @@ MCP_IDLE_SECS = 300
 # Pressing Escape three times stops any agent from anywhere. Escapes an agent types itself don't count.
 ESCAPE, ESCAPES_TO_STOP, ESCAPE_WINDOW = 53, 3, 1.5
 STOP_REQUEST = DATA / "stop-request"  # its time tells cu-mcp to refuse actions for a moment
+# While an agent works, the person's own clicks, scrolls and keys (not the agent's) are noted here, one
+# "<epoch> <kind>" line each, so cu-mcp can make the agent look again and benchmark checks can tell the
+# person's changes from the agent's. Bounded: trimmed to the last USER_INPUT_KEEP lines.
+USER_INPUT = DATA / "user-input"
+USER_INPUT_KEEP, USER_INPUT_EVERY = 500, 1.0  # at most one note a second
 
 
 class MenuBar(rumps.App):
@@ -685,6 +693,7 @@ class MenuBar(rumps.App):
         def on_key(event):
             if event.keyCode() == ESCAPE:
                 self.on_escape(event)
+            self.on_user_input(event, "key")
             detector.key_down(event.keyCode(), event.modifierFlags(), time.monotonic())
 
         def on_flags(event):
@@ -701,7 +710,29 @@ class MenuBar(rumps.App):
             NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, local(on_key)),
             NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, on_flags),
             NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, local(on_flags)),
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown, lambda e: self.on_user_input(e, "click")),
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                NSEventMaskScrollWheel, lambda e: self.on_user_input(e, "scroll")),
         ]
+
+    def on_user_input(self, event, kind: str):
+        """Note the person's own input while an agent is working (the agent's own input is ignored)."""
+        now = time.time()
+        if now - getattr(self, "_input_noted", 0.0) < USER_INPUT_EVERY or self.icon_state() != "working":
+            return
+        if _typed_by_an_agent(event):
+            return
+        self._input_noted = now
+        try:
+            USER_INPUT.parent.mkdir(parents=True, exist_ok=True)
+            with USER_INPUT.open("a") as f:
+                f.write(f"{now:.1f} {kind}\n")
+            lines = USER_INPUT.read_text().splitlines()
+            if len(lines) > USER_INPUT_KEEP * 2:
+                USER_INPUT.write_text("\n".join(lines[-USER_INPUT_KEEP:]) + "\n")
+        except OSError:
+            pass
 
     def on_escape(self, event):
         if _typed_by_an_agent(event):

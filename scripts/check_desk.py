@@ -14,10 +14,12 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 DESKTOP = Path.home() / "Desktop"
 SNAPSHOTS = Path.home() / "Library" / "Application Support" / "Computer Use" / "bench"
+USER_INPUT = SNAPSHOTS.parent / "user-input"  # the person's own clicks and keys while an agent worked
 
 
 def osa(script: str, timeout: int = 180) -> str:
@@ -114,7 +116,16 @@ def counts() -> dict:
     return {"notes": live_notes(),
             "reminders": osa('tell application "Reminders" to count (every reminder whose completed is false)'),
             "events": osa(EVENTS_NEAR),
-            "desktop": sorted(p.name for p in DESKTOP.iterdir() if not p.name.startswith("."))}
+            "desktop": sorted(p.name for p in DESKTOP.iterdir() if not p.name.startswith(".")),
+            "at": time.time()}
+
+
+def person_since(t: float) -> int:
+    """How many times the person used the mouse or keyboard since t (noted by the app)."""
+    try:
+        return sum(1 for ln in USER_INPUT.read_text().splitlines() if ln and float(ln.split()[0]) >= t)
+    except (OSError, ValueError):
+        return 0
 
 
 def cleaned(stamp: str) -> dict:
@@ -148,6 +159,8 @@ def cleaned(stamp: str) -> dict:
         wrong.append(f"Desktop lost {lost}")
     if gained := sorted(set(now["desktop"]) - expected - {f"CU Bench {stamp}"}):
         wrong.append(f"Desktop gained {gained}")
+    if wrong and (n := person_since(before.get("at", 0))):
+        wrong.append(f"note: the person used the Mac {n} time(s) during this, so some changes may be theirs")
     return {"removed": (not left, "all gone" if not left else "still there: " + ", ".join(left)),
             "nothing_else": (not wrong, "untouched" if not wrong else "; ".join(wrong))}
 

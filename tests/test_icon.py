@@ -84,3 +84,19 @@ def test_an_ai_app_counts_as_working_for_its_whole_task(tmp_path, monkeypatch):
     (tmp_path / "agent-task").write_text(json.dumps({"state": "done", "at": time.time()}))
     a._mcp_checked = 0.0
     assert a.icon_state() == "idle"
+
+
+def test_the_persons_input_is_noted_while_an_agent_works(tmp_path, monkeypatch):
+    monkeypatch.setattr(menubar, "USER_INPUT", tmp_path / "user-input")
+    a = app(tmp_path, monkeypatch)
+    monkeypatch.setattr(menubar, "_typed_by_an_agent", lambda e: False)
+    a.on_user_input(None, "click")
+    assert not (tmp_path / "user-input").exists()  # nothing is running: nothing to note
+    a.agent = object()
+    a.on_user_input(None, "click")
+    a.on_user_input(None, "key")  # within a second: one note is enough
+    assert (tmp_path / "user-input").read_text().split()[1:] == ["click"]
+    a._input_noted = 0.0
+    monkeypatch.setattr(menubar, "_typed_by_an_agent", lambda e: True)
+    a.on_user_input(None, "key")  # the agent's own key
+    assert len((tmp_path / "user-input").read_text().splitlines()) == 1
