@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import actions, narrate, recovery, usage
+from . import actions, memory, narrate, recovery, usage
 from .config import load_settings
 from . import vision
 from .jev import Jev, installed_apps, text_candidates
@@ -216,8 +216,9 @@ class Agent:
     def run_jev(self, task: str) -> str:
         """Jev picks op + target + text + app in one request per turn, from the AX tree."""
         hints = [f"NOTE: {n}" for n in recovery.notes_of(task)]  # lessons and retry guidance, as history Jev reads
+        self._hint_urls = URL.findall("\n".join(hints))  # direct pages that lessons and skills point to
         task = recovery.strip_notes(task)
-        texts, apps = text_candidates(task), installed_apps()
+        texts, apps = text_candidates(task) + self._hint_urls, installed_apps()
         history: list[str] = []
         recent: deque = deque(maxlen=3)
         seen_screens: dict[str, list[str]] = {}
@@ -241,7 +242,7 @@ class Agent:
                 ok_verified, why = self.verify_done(task, app, els, history)
                 if not ok_verified:
                     self.log(f"  not done yet ({why})")
-                    history.append(f"FAILED: DONE was premature ({why}); finish the remaining steps")
+                    self._failed(history, f"FAILED: DONE was premature ({why}); finish the remaining steps")
                     seen_screens.setdefault(screen_sig, []).append("DONE")
                     misses = 0
                     continue
@@ -273,7 +274,7 @@ class Agent:
                     self.log(f"    jev box visual grounding → at ({cx}, {cy}) conf={conf:.2f}")
                 else:
                     misses += 1
-                    history.append(f"FAILED: {desc} (no matching element)")
+                    self._failed(history, f"FAILED: {desc} (no matching element)")
                     seen_screens.setdefault(screen_sig, []).append(desc)
                     continue
 
@@ -287,7 +288,7 @@ class Agent:
             except actions.pyautogui.FailSafeException:
                 raise
             except Exception as e:
-                history.append(f"FAILED: {desc} ({e})")
+                self._failed(history, f"FAILED: {desc} ({e})")
                 seen_screens.setdefault(screen_sig, []).append(desc)
                 misses += 1
                 continue
@@ -297,6 +298,11 @@ class Agent:
             recent.append(desc)
             time.sleep(0.08)
         return self._report("stopped: hit the action limit")
+
+    def _failed(self, history: list[str], why: str):
+        """Note a failed step for Jev's next choice and in the log (which recovery reads to assess)."""
+        history.append(why)
+        self.log(f"    {why}")
 
     def _do_jev(self, op: str, d: dict, el: Element | None, task: str = "", els: list[Element] | None = None):
         if els is None:
@@ -341,10 +347,10 @@ class Agent:
                 x, y = dx + w // 2, dy + h // 2
             actions.scroll(x, y, "down" if op == "SCROLL_DOWN" else "up", 400)
         elif op == "OPEN_APP":
-            urls = re.findall(r'https?://[^\s,;"\']+|www\.[^\s,;"\']+', task)
+            dest = _destination(task, getattr(self, "_hint_urls", []))
             is_browser = d.get("app", "").lower() in ("safari", "google chrome", "chrome", "arc", "brave", "firefox", "edge")
-            if urls and is_browser:
-                actions.open_url(urls[0], browser=d.get("app"))
+            if dest and is_browser:
+                actions.open_url(dest, browser=d.get("app"))
             else:
                 if not actions.open_app(d["app"]):
                     raise RuntimeError(f"could not open {d['app']}")
@@ -459,6 +465,25 @@ def _fmt(s: dict) -> str:
 
 
 TEXT_INPUT = ("AXTextField", "AXTextArea", "AXSearchField", "AXComboBox")
+
+
+URL = re.compile(r'https?://[^\s,;"\'()]+')
+SHARED = re.compile(r"(include|add|attach|share|paste|with|containing)\s+(the\s+|this\s+|a\s+)?(link|url)\W*$", re.I)
+
+
+def _destination(task: str, hint_urls: list[str]) -> str | None:
+    """Where to point the browser: a page lessons or skills name for a site in the task, else a URL the
+    task says to go to, else the site itself. Never a link the task wants shared (\"include the link …\")."""
+    places = memory.places(task)
+    for u in hint_urls:
+        if any(p in u for p in places):
+            return u.rstrip(".")
+    shared = {m.group(0).rstrip(".") for m in URL.finditer(task) if SHARED.search(task[: m.start()][-40:])}
+    unquoted = memory.QUOTED.sub(" ", task)  # links inside quoted text are content, not places to go
+    for m in URL.finditer(unquoted):
+        if m.group(0).rstrip(".") not in shared:
+            return m.group(0).rstrip(".")
+    return f"https://{places[0]}" if places else None
 
 
 def _frontmost() -> str:

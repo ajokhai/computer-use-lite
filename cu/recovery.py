@@ -32,8 +32,8 @@ element, scrolling, waiting for a page to load, closing a dialog that's in the w
 # For Jev alone (it can't write text): known failure patterns → what to do differently.
 RULES = [
     (r"no matching element|stuck at 'CLICK'|went blind|no elements",
-     "The element wasn't in the accessibility list. Wait for the page to load, scroll, or use the "
-     "keyboard (Tab, a shortcut) or a direct URL instead of clicking."),
+     "The element wasn't in the accessibility list. Go to the page for the action directly (a compose or "
+     "new-item URL), wait for it to load, or use the keyboard (Tab, a shortcut) instead of clicking."),
     (r"isn't a text field|no text field has focus",
      "Click the text box itself (its label is usually like 'Post text', 'Message', 'Search') before typing."),
     (r"premature|not done yet",
@@ -125,7 +125,7 @@ class Recovery:
             keys = memory.places(task, self.where()) or keys
         if self.history:  # what didn't work is a lesson too
             last = self.history[-1]
-            self._learn(keys, task, last["diagnosis"], last.get("lesson") or last["next_try"], "failed")
+            self._learn(keys, task, last["diagnosis"], last.get("lesson") or "", "failed")
         self._skills(task, keys, known, ok)
         return ok, report
 
@@ -160,7 +160,7 @@ class Recovery:
         return verdict
 
     def _learn(self, keys: list[str], task: str, what: str, fix: str, outcome: str):
-        if not fix:
+        if not fix or what == "unclear":  # generic advice isn't worth remembering
             return
         for where in keys[:2] or ["general"]:
             memory.record(where, task, what, fix, outcome, self.model)

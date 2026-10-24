@@ -117,3 +117,13 @@ def test_jev_reads_notes_as_hints_not_as_text_to_type():
     task = recovery.with_notes("type 'hello' into the note", ["This time: click the Note field first"])
     assert recovery.notes_of(task) == ["This time: click the Note field first"]
     assert recovery.strip_notes(task) == "type 'hello' into the note"
+
+
+def test_jev_goes_to_the_place_not_to_a_link_it_should_share():
+    from cu.agent import _destination
+    task = ("In Chrome go to x.com and post a tweet, and include the link https://github.com/me/repo. "
+            "For example: \"Testing https://github.com/me/repo\"")
+    assert _destination(task, []) == "https://x.com"
+    assert _destination(task, ["https://x.com/compose/post"]) == "https://x.com/compose/post"  # a page a lesson named
+    assert _destination("open https://news.ycombinator.com and read the top story", []) == "https://news.ycombinator.com"
+    assert _destination("make a note saying hi", []) is None
