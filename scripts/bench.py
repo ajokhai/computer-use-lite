@@ -77,7 +77,7 @@ def run(model: str, task: str, timeout: int) -> dict:
         p = subprocess.run(cmd, cwd=PROJECT, env=env, capture_output=True, text=True, timeout=timeout)
         out, code = (p.stdout + p.stderr), p.returncode
     except subprocess.TimeoutExpired as e:
-        out, code = f"{e.stdout or ''}{e.stderr or ''}\nTIMED OUT after {timeout}s", -1
+        out, code = f"{e.stdout or ''}{e.stderr or ''}\nstopped: TIMED OUT after {timeout}s (counts as a fail)", -1
     seconds = round(time.monotonic() - t0, 1)
     lines = [ln for ln in out.splitlines() if ln.strip()]
     switched = [ln for ln in lines if "switching to" in ln or "carries on alone" in ln]
@@ -94,7 +94,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("models", nargs="+", choices=MODELS)
     p.add_argument("--task", default="tweet", choices=TASKS)
-    p.add_argument("--timeout", type=int, default=900)
+    p.add_argument("--timeout", type=int, default=600, help="seconds before a run fails (each phase)")
     p.add_argument("--no-cleanup", action="store_true",
                    help="skip a model's own cleanup and delete the test items by exact name instead (for models "
                         "that can't see which item they'd delete, on a Mac with real data)")
