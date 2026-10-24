@@ -15,6 +15,7 @@ from AppKit import (
     NSEventMaskFlagsChanged,
     NSEventMaskKeyDown,
     NSImage,
+    NSImageSymbolConfiguration,
     NSWorkspace,
 )
 
@@ -31,7 +32,7 @@ ICONS = {"idle": ("cursorarrow.rays", None, "Idle"),
          "working": ("cursorarrow.click.2", "systemOrangeColor", "An agent is using your Mac"),
          "listening": ("mic.fill", "systemRedColor", "Listening")}
 MCP_LOG = LOG.parent / "mcp.log"
-MCP_BUSY_SECS = 6
+MCP_BUSY_SECS = 60  # an AI app thinks for tens of seconds between actions; it's still working
 
 # Pressing Escape three times stops any agent from anywhere. Escapes an agent types itself don't count.
 ESCAPE, ESCAPES_TO_STOP, ESCAPE_WINDOW = 53, 3, 1.5
@@ -161,11 +162,13 @@ class MenuBar(rumps.App):
         img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, f"Computer Use: {tip}")
         item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
         if img is not None and item is not None:
-            img.setTemplate_(True)
+            if color:  # the menu bar ignores tint on template images, so color the symbol itself
+                img = img.imageWithSymbolConfiguration_(
+                    NSImageSymbolConfiguration.configurationWithPaletteColors_([getattr(NSColor, color)()]))
+            img.setTemplate_(not color)
             button = item.button()
             button.setImage_(img)
             button.setTitle_("")
-            button.setContentTintColor_(getattr(NSColor, color)() if color else None)
             button.setToolTip_(f"Computer Use: {tip}")
             button.setAlphaValue_(1.0)
 
@@ -181,7 +184,8 @@ class MenuBar(rumps.App):
         if now - getattr(self, "_mcp_checked", 0.0) > 0.5:  # one stat every half second
             self._mcp_checked = now
             try:
-                self._mcp_recent = time.time() - MCP_LOG.stat().st_mtime < MCP_BUSY_SECS
+                last = MCP_LOG.stat().st_mtime
+                self._mcp_recent = time.time() - last < MCP_BUSY_SECS and not _stopped_since(last)
             except OSError:
                 self._mcp_recent = False
         return self._mcp_recent
@@ -1178,6 +1182,14 @@ def _choose_zip():
         from pathlib import Path
         return Path(str(panel.URLs()[0].path()))
     return None
+
+
+def _stopped_since(t: float) -> bool:
+    """Whether the user pressed Escape three times after time t (so an AI's last action is over)."""
+    try:
+        return float(STOP_REQUEST.read_text()) >= t
+    except (OSError, ValueError):
+        return False
 
 
 def _typed_by_an_agent(event) -> bool:

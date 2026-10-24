@@ -58,3 +58,13 @@ def test_escapes_an_agent_types_dont_count(tmp_path, monkeypatch):
     for _ in range(5):
         a.on_escape(None)
     assert not stopped
+
+
+def test_escape_three_times_ends_the_working_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(menubar, "STOP_REQUEST", tmp_path / "stop-request")
+    a = app(tmp_path, monkeypatch)
+    (tmp_path / "mcp.log").write_text("click_element ok\n")
+    assert a.icon_state() == "working"
+    (tmp_path / "stop-request").write_text(str(time.time() + 1))
+    a._mcp_checked = 0.0
+    assert a.icon_state() == "idle"
