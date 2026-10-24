@@ -68,6 +68,10 @@ def load_settings() -> dict:
     merged["limits"] = {**DEFAULTS["limits"], **saved.get("limits", {})}
     if merged["mode"] == "gemini":  # modes are named by role now
         merged["mode"] = "vision"
+    try:  # CU_SETTINGS='{"vision_model": "..."}' overrides for one process (benchmarks, tests); never saved
+        merged.update(json.loads(os.environ.get("CU_SETTINGS") or "{}"))
+    except ValueError:
+        pass
     return merged
 
 

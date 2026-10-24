@@ -11,7 +11,7 @@ from typing import Callable
 from PIL import Image
 
 from .. import actions, usage
-from ..screen import Element, _load_native_lib, ax_elements, screen_size, screenshot_png
+from ..screen import Element, _load_native_lib, ax_elements, capture, screenshot_png
 
 PLAN_SYSTEM = """You control a macOS computer for the user. Look at the screenshot and the
 accessibility elements of the frontmost app, then return the next few ATOMIC steps toward the task.
@@ -83,21 +83,24 @@ def data_url(png: bytes) -> str:
 
 
 class Shot:
-    """One screenshot and the factor from its pixels to screen points (Retina and downscaling)."""
+    """One screenshot of the display in use, with the mapping from its pixels to global screen
+    points: the display's origin (other displays can sit at negative coordinates) and the
+    scale (Retina and downscaling)."""
+
+    ox = oy = 0  # the display's top-left corner in global points
 
     def __init__(self, max_width: int = 1280):
-        self.png = screenshot_png(max_width=max_width)
+        self.png, (self.ox, self.oy, w, _h) = capture(max_width=max_width)
         self.width, self.height = Image.open(io.BytesIO(self.png)).size
-        sw, _ = screen_size()
-        self.scale = sw / self.width
+        self.scale = w / self.width
 
     def point(self, x, y) -> tuple[int, int]:
-        """Screenshot pixels → screen points."""
-        return int(round(float(x) * self.scale)), int(round(float(y) * self.scale))
+        """Screenshot pixels → global screen points."""
+        return int(round(self.ox + float(x) * self.scale)), int(round(self.oy + float(y) * self.scale))
 
     def pixel(self, x, y) -> tuple[int, int]:
-        """Screen points → screenshot pixels."""
-        return int(round(float(x) / self.scale)), int(round(float(y) / self.scale))
+        """Global screen points → screenshot pixels."""
+        return int(round((float(x) - self.ox) / self.scale)), int(round((float(y) - self.oy) / self.scale))
 
 
 def element_at(x: int, y: int) -> Element | None:

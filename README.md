@@ -6,7 +6,10 @@ Control the whole Mac, not just a browser. Any AI can drive it through the built
 1. Open `Computer Use <version>.dmg` (next to this Project folder) and drag **Computer Use** into Applications.
 2. Open it. A cursor icon appears in the menu bar; there's no Dock icon and no window.
 3. Go to **Settings › Allow Accessibility…** and **Allow Screen Recording…**, then add Computer Use.
-4. Optional: **Settings › API Keys…** (they're stored in the macOS Keychain) and **Settings › Open at Login**.
+4. Choose how Computer Use thinks, either or both:
+   - **No API key:** **Connect AI Apps** › tick Claude, Antigravity, VS Code, Cursor or Windsurf. The AI you're already signed into there drives your Mac.
+   - **The bar's built-in agent:** **Settings › API Keys…** opens Models and Keys: add a key for any provider (stored in the macOS Keychain), or set up a local model (server address + model name).
+5. Optional: **Settings › Open at Login**.
 5. Optional: under **Connect AI Apps**, tick Antigravity, VS Code, Cursor, Windsurf or Claude, then restart that app.
 
 ## Let any AI drive the Mac (MCP)
@@ -25,14 +28,14 @@ The app bundles `cu-mcp`, a native MCP server written in Rust. It needs no API k
 All x/y coordinates are pixels of the latest screenshot. `computer_task` hands a whole task to the app's own agent, which needs its own keys (see Modes).
 
 ## Modes (the menu bar agent)
-Pick one under **Mode**. Modes are named by role. The built-in vision model is currently Gemini, so the vision modes need a Gemini key.
+Pick one under **Mode**. Modes are named by role. The vision model can be Claude, OpenAI, Gemini, any OpenRouter model, or a local model (Ollama, LM Studio, any OpenAI-compatible server). Pick it in **Mode › Vision Model**, or leave it on Auto, which uses the first with a key and quota in the order Claude, OpenAI, Gemini, OpenRouter, Local. Screenshots follow the display with the frontmost window, so it works across several screens.
 
 | Mode | Keys needed | Who thinks | Who clicks |
 |---|---|---|---|
 | **Auto** | any | the best mode your keys and remaining quota allow | |
-| **Vision + Jev** | Gemini and Jev | the vision model plans a few steps at a time | Jev, with the vision model when Jev is unsure |
+| **Vision + Jev** | a vision model and Jev | the vision model plans a few steps at a time | Jev, with the vision model when Jev is unsure |
 | **Jev Only** | Jev | Jev | Jev |
-| **Vision Only** | Gemini | the vision model | the vision model |
+| **Vision Only** | a vision model | the vision model | the vision model |
 
 **Jev Only:** Jev works from text only and doesn't generate text. Each turn, the app reads the accessibility tree of the frontmost app. In a single request, Jev chooses the next action, the element it applies to, the phrase from your task to type, and the installed app to open. Put text you want typed in quotes, or after words like *saying*, *titled* or *search for*.
 
@@ -85,10 +88,11 @@ Picking a voice plays a short preview.
 `Computer Use Voice Pack <version>.zip` is next to the DMG. It's a separate download so that the app download stays small. Install it from **Voice › Install Voice Pack…**; the app also looks for it in Downloads. Choosing a model or voice that needs the pack offers to install it.
 
 ## Usage and switching
-- **Usage** in the menu shows each model's use in the current window, what's left, and when it resets. Gemini resets at midnight Pacific; Jev resets on your billing day.
+- **Usage** in the menu shows one line per provider; open it for each model's count, its dashboard and limits. Daily counts reset at midnight Pacific; Jev resets on your billing day.
 - Neither provider has an API that reports your remaining quota, so the app counts its own requests. Click a line to enter that model's limit from AI Studio or your TypeSafe dashboard. The count doesn't include usage from outside this app.
 - When a provider replies "out of quota", the app marks that model as out until it resets.
-- **While Working › Switch Models When One Runs Out:** steps down the Gemini models (3.8 Flash → 3.5 Flash-Lite → 3 Flash preview), and moves between Jev and the vision model, carrying on from the current screen.
+- **While Working › Switch Models When One Runs Out:** steps down each provider's models, then moves to the next provider and between Jev and the vision model, carrying on from the current screen.
+- **Privacy:** screenshots go to whichever cloud provider you pick (OpenAI keeps the conversation server-side). A local model keeps everything on the Mac.
 
 ## Updates
 - The app checks GitHub Releases at launch and every 6 hours.

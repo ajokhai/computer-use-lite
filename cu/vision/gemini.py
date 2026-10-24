@@ -8,7 +8,7 @@ from typing import Callable
 from google import genai
 
 from .. import actions, narrate as narration
-from ..screen import ax_elements, screen_size, screenshot_png
+from ..screen import ax_elements, capture
 from .base import CU_SYSTEM, OPEN_APP_DESC, OPEN_APP_SCHEMA, YIELD_DESC, YIELD_SCHEMA, Declined, VisionModel, b64
 
 OPEN_APP_TOOL = {"type": "function", "name": "open_app", "description": OPEN_APP_DESC, "parameters": OPEN_APP_SCHEMA}
@@ -65,14 +65,16 @@ class Gemini(VisionModel):
         allow_risky: bool = False,
         confirm_all: bool = False,
     ) -> tuple[bool, str]:
-        sw, sh = screen_size()
-        X = lambda v: int(int(v) / 1000 * sw)
-        Y = lambda v: int(int(v) / 1000 * sh)
+        # Gemini answers on a 1000x1000 grid over the screenshot it last saw; map that onto the
+        # display the screenshot came from (which follows the frontmost window).
+        png, disp = capture()
+        X = lambda v: int(disp[0] + int(v) / 1000 * disp[2])
+        Y = lambda v: int(disp[1] + int(v) / 1000 * disp[3])
         tools = [{"type": "computer_use", "environment": "desktop"}, OPEN_APP_TOOL, YIELD_TOOL]
         it = self._create(
             system_instruction=CU_SYSTEM,
             tools=tools,
-            input=[{"type": "text", "text": instruction}, _img(screenshot_png())],
+            input=[{"type": "text", "text": instruction}, _img(png)],
         )
         for _ in range(max_turns):
             if stop is not None and stop.is_set():
@@ -106,7 +108,7 @@ class Gemini(VisionModel):
                 except Exception as e:  # report back so the model can recover
                     out = {"status": "error", "error": str(e), **extra}
                 results.append((name, _get(call, "id"), out))
-            shot = screenshot_png()
+            shot, disp = capture()
             app, _ = ax_elements(limit=1)
             it = self._create(
                 previous_interaction_id=it.id,

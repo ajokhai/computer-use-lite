@@ -53,27 +53,56 @@ def screen_size() -> tuple[int, int]:
     return int(w), int(h)
 
 
-def screenshot_png(max_width: int = 1440) -> bytes:
-    """Capture the main display, downscaled from Retina pixels so tokens stay low."""
+def active_display() -> tuple[int, int, int, int]:
+    """(x, y, width, height) in global points of the display showing the frontmost app's front
+    window, so screenshots follow the app in use on a multi-display setup. The main display otherwise."""
+    import Quartz
+    main = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
+    try:
+        err, ids, n = Quartz.CGGetActiveDisplayList(16, None, None)
+        displays = [Quartz.CGDisplayBounds(d) for d in ids[:n]] if err == 0 else []
+        _, pid = frontmost_app()
+        options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+        for w in Quartz.CGWindowListCopyWindowInfo(options, 0) or []:  # front to back
+            if w.get("kCGWindowOwnerPID") != pid or w.get("kCGWindowLayer") != 0:
+                continue
+            b = w["kCGWindowBounds"]
+            cx, cy = b["X"] + b["Width"] / 2, b["Y"] + b["Height"] / 2
+            main = next((r for r in displays if r.origin.x <= cx < r.origin.x + r.size.width
+                         and r.origin.y <= cy < r.origin.y + r.size.height), main)
+            break
+    except Exception:
+        pass
+    return int(main.origin.x), int(main.origin.y), int(main.size.width), int(main.size.height)
+
+
+def capture(max_width: int = 1440) -> tuple[bytes, tuple[int, int, int, int]]:
+    """A PNG of the active display (see active_display), downscaled so tokens stay low, and that
+    display's bounds in points: image pixel (px, py) is point (x + px * w / width, y + py * w / width)."""
+    region = x, y, w, h = active_display()
     with tempfile.NamedTemporaryFile(suffix=".png") as f:
         lib = _load_native_lib()
         captured = False
         if lib and hasattr(lib, "cu_capture_to_file"):
             try:
-                captured = bool(lib.cu_capture_to_file(0.0, 0.0, 0.0, 0.0, f.name.encode("utf-8")))
+                captured = bool(lib.cu_capture_to_file(float(x), float(y), float(w), float(h), f.name.encode("utf-8")))
             except Exception:
                 captured = False
         if not captured:
-            subprocess.run(["screencapture", "-x", "-C", "-m", f.name], check=True)
+            subprocess.run(["screencapture", "-x", "-C", f"-R{x},{y},{w},{h}", f.name], check=True)
         img = Image.open(f.name)
         img.load()
-    pw, _ = screen_size()
-    target = min(max_width, pw)
+    target = min(max_width, w)
     if img.width != target:
         img = img.resize((target, round(img.height * target / img.width)), Image.LANCZOS)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+    return buf.getvalue(), region
+
+
+def screenshot_png(max_width: int = 1440) -> bytes:
+    """A PNG of the display in use (see capture)."""
+    return capture(max_width)[0]
 
 
 def frontmost_app() -> tuple[str, int]:

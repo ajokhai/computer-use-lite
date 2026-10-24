@@ -17,7 +17,7 @@ from AppKit import (
 )
 
 from . import __version__, integration, onboarding, say, updater, usage, voicepack
-from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
+from .config import LOG, load_keys, load_settings, save_settings
 from .shortcut import PRESETS, Detector, Shortcut
 from .logger import CRASH_LOG, rotate, setup_logging
 
@@ -173,28 +173,40 @@ class MenuBar(rumps.App):
             item.set_callback((lambda _, n=name: self.toggle_client(n)) if integration.installed(name) else None)
 
     def refresh_usage(self):
+        """One line per provider in use; its submenu has each model's usage, the dashboard and limits."""
         if self.usage_menu._menu is not None and len(self.usage_menu):
             self.usage_menu.clear()
         from . import vision
-        used = [m for p in vision.PROVIDERS if vision.has_key(p) for m in vision.models(p, self.settings)]
-        for model, line in zip([*used, "jev"], usage.summary_lines(used)):
-            if model == "jev" and not _env_key("jev"):
-                line = "Jev: no API key (click to add)"
-            p = "jev" if model == "jev" else vision.provider_of(model)
-            cb = (lambda _, p=p: self.open_dashboard(p)) if model != "jev" or _env_key("jev") else (lambda _: self.edit_keys(None))
-            self.usage_menu.add(rumps.MenuItem(line, callback=cb))
-        missing = [vision.LABELS[p] for p in vision.PROVIDERS if p != "local" and not vision.has_key(p)]
-        if missing:
-            self.usage_menu.add(rumps.MenuItem(f"No key yet: {', '.join(missing)} (click to add)",
-                                               callback=lambda _: self.edit_keys(None)))
+        groups = [(p, vision.models(p, self.settings)) for p in vision.PROVIDERS if vision.has_key(p)]
+        if _env_key("jev"):
+            groups.insert(0, ("jev", ["jev"]))
+        if not groups:
+            self.usage_menu.add(rumps.MenuItem("No Models Set Up Yet", callback=None))
+        for p, ms in groups:
+            states = [usage.status(m) for m in ms]
+            if p == "jev":
+                head = f"Jev: ${states[0]['used']:.2f} this month"
+                lines = usage.summary_lines([])
+            else:
+                head = f"{vision.LABELS[p]}: {sum(st['requests'] for st in states)} requests today"
+                lines = usage.summary_lines(ms)[:len(ms)]
+            if not any(st["available"] for st in states):
+                head += " · out of quota"
+            sub = rumps.MenuItem(head)
+            for line in lines:
+                sub.add(rumps.MenuItem(line, callback=None))
+            sub.add(rumps.separator)
+            if p != "local":
+                sub.add(rumps.MenuItem("Open Dashboard", callback=lambda _, p=p: self.open_dashboard(p)))
+            if p == "jev":
+                sub.add(rumps.MenuItem("Set Monthly Budget…", callback=lambda _: self.set_limit("jev")))
+            else:
+                for m in ms:
+                    sub.add(rumps.MenuItem(f"Set {usage.pretty(m)} Daily Limit…", callback=lambda _, m=m: self.set_limit(m)))
+            self.usage_menu.add(sub)
         self.usage_menu.add(rumps.separator)
-        self.usage_menu.add(rumps.MenuItem("Click a line to open its online dashboard", callback=None))
-        limits_menu = rumps.MenuItem("Set Budget / Limits")
-        limits_menu.add(rumps.MenuItem("Jev Monthly Budget…", callback=lambda _: self.set_limit("jev")))
-        for m in used:
-            limits_menu.add(rumps.MenuItem(f"{usage.pretty(m)} Daily Limit…", callback=lambda _, mod=m: self.set_limit(mod)))
-        self.usage_menu.add(limits_menu)
-        self.usage_menu.add(rumps.MenuItem("Clear “out of quota” flags", callback=self.clear_flags))
+        self.usage_menu.add(rumps.MenuItem("Add a Model…", callback=self.edit_keys))
+        self.usage_menu.add(rumps.MenuItem("Clear Out-of-Quota Flags", callback=self.clear_flags))
         if self.agent is None:
             self.set_icon(IDLE_ICON)
 
@@ -342,53 +354,9 @@ class MenuBar(rumps.App):
         return resp.text.strip() if resp.clicked else None
 
     def edit_keys(self, _):
-        """One window with a field per key. Blank fields are left alone; Remove clears a saved key."""
-        from AppKit import NSAlert, NSFont, NSMakeRect, NSSecureTextField, NSTextField, NSView
-
-        rows = len(KEYS)
-        width, row_h = 420, 74
-        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, width, rows * row_h))
-        fields = {}
-        for i, name in enumerate(KEYS):
-            label, hint = KEY_INFO[name]
-            saved = bool(get_key(name))
-            y = (rows - 1 - i) * row_h
-            title = NSTextField.labelWithString_(f"{label}{'  ✓ saved' if saved else ''}")
-            title.setFont_(NSFont.boldSystemFontOfSize_(12))
-            title.setFrame_(NSMakeRect(0, y + 52, width, 18))
-            field = NSSecureTextField.alloc().initWithFrame_(NSMakeRect(0, y + 26, width, 24))
-            field.setPlaceholderString_("Saved — type a new key to replace it" if saved else "Paste key (optional)")
-            note = NSTextField.labelWithString_(hint)
-            note.setFont_(NSFont.systemFontOfSize_(11))
-            note.setTextColor_(__import__("AppKit").NSColor.secondaryLabelColor())
-            note.setFrame_(NSMakeRect(0, y + 6, width, 16))
-            for v in (title, field, note):
-                view.addSubview_(v)
-            fields[name] = field
-
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_("API Keys")
-        alert.setInformativeText_("All optional. Keys are stored in your macOS Keychain.")
-        alert.addButtonWithTitle_("Save")
-        alert.addButtonWithTitle_("Cancel")
-        alert.addButtonWithTitle_("Remove Saved Keys…")
-        alert.setAccessoryView_(view)
-        alert.window().setInitialFirstResponder_(fields[KEYS[0]])
-        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        choice = alert.runModal()
-        if choice == 1000:  # Save
-            for name, field in fields.items():
-                value = str(field.stringValue()).strip()
-                if value:
-                    set_key(name, value)
-        elif choice == 1002:  # Remove…
-            saved = [n for n in KEYS if get_key(n)]
-            for name in saved:
-                if rumps.alert("Remove key", f"Remove the saved {KEY_INFO[name][0]} key?", ok="Remove",
-                               cancel="Keep") == 1:
-                    set_key(name, "")
-        load_keys()
-        self.refresh_usage()
+        """Models and Keys: each provider's status, with a button to add or change its key."""
+        from . import keys_window
+        keys_window.show(self)
 
     def set_limit(self, provider: str):
         limits = self.settings["limits"].setdefault(provider, {})
@@ -426,58 +394,28 @@ class MenuBar(rumps.App):
     # --- the vision model -------------------------------------------------------
 
     def build_vision_menu(self):
-        """Mode › Vision Model: Auto, or a specific model; providers without a key are greyed out."""
+        """Mode › Vision Model: Auto, the models that are set up, and Add a Model…."""
         from . import vision
         if self.vision_menu._menu is not None and len(self.vision_menu):
             self.vision_menu.clear()
         choice = self.settings.get("vision_model") or "auto"
-        auto = rumps.MenuItem("Auto: First Available", callback=lambda _: self.set_vision_model("auto"))
+        auto = rumps.MenuItem("Auto", callback=lambda _: self.set_vision_model("auto"))
         auto.state = choice == "auto"
         self.vision_menu.add(auto)
-        for p in vision.PROVIDERS:
+        ready = [m for p in vision.PROVIDERS if vision.has_key(p) for m in vision.models(p, self.settings)]
+        if ready:
             self.vision_menu.add(rumps.separator)
-            ready = vision.has_key(p)
-            hint = "" if ready else "  (needs a model)" if p == "local" else "  (needs API key)"
-            self.vision_menu.add(rumps.MenuItem(vision.LABELS[p] + hint, callback=None))
-            for m in vision.models(p, self.settings):
-                item = rumps.MenuItem("   " + usage.pretty(m), callback=(lambda _, m=m: self.set_vision_model(m)) if ready else None)
-                item.state = choice == m
-                self.vision_menu.add(item)
-            if p in ("openrouter", "local"):
-                self.vision_menu.add(rumps.MenuItem(f"   Set {'OpenRouter' if p == 'openrouter' else 'Local'} Model…", callback=lambda _, p=p: self.set_compat_model(p)))
+        for m in ready:
+            item = rumps.MenuItem(usage.pretty(m), callback=lambda _, m=m: self.set_vision_model(m))
+            item.state = choice == m
+            self.vision_menu.add(item)
+        self.vision_menu.add(rumps.separator)
+        self.vision_menu.add(rumps.MenuItem("Add a Model…", callback=self.edit_keys))
 
     def set_vision_model(self, model: str):
         self.settings["vision_model"] = model
         save_settings(self.settings)
         self.refresh()
-
-    def set_compat_model(self, provider: str):
-        """OpenRouter: any model id it lists. Local: a model on an OpenAI-compatible server."""
-        from . import vision
-        from .config import DEFAULTS
-        from .vision.compat import OPENROUTER_URL, list_models
-        if provider == "local":
-            url = self._prompt("Local Model Server", "OpenAI-compatible URL (Ollama: http://localhost:11434/v1, "
-                               "LM Studio: http://localhost:1234/v1):", self.settings.get("local_url") or "")
-            if url is None:
-                return
-            self.settings["local_url"] = url or DEFAULTS["local_url"]
-        url = self.settings["local_url"] if provider == "local" else OPENROUTER_URL
-        found = list_models(url) if provider == "local" else []
-        hint = (f"On this server: {', '.join(found[:12])}" if found else
-                "The server isn't answering; start it, or type the model name anyway.") if provider == "local" else \
-            "A vision model's id from openrouter.ai/models, e.g. provider/model-name."
-        name = self._prompt(f"{vision.LABELS[provider]}", f"Model name (blank = don't use it).\n{hint}",
-                            self.settings.get(f"{provider}_model") or (found[0] if found else ""))
-        if name is None:
-            return
-        old = self.settings.get(f"{provider}_model")
-        self.settings[f"{provider}_model"] = name
-        if self.settings.get("vision_model") in (f"{provider}:{old}",):
-            self.settings["vision_model"] = f"{provider}:{name}" if name else "auto"
-        save_settings(self.settings)
-        self.refresh()
-        self.refresh_usage()
 
     # --- the shortcut ----------------------------------------------------------
 

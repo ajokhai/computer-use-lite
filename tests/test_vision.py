@@ -335,3 +335,11 @@ def test_agent_vision_mode_reports_a_corner_abort(desk, monkeypatch):
                                                                             client=client)})
     a = agent.Agent(mode="vision", vision=v, auto_switch=False, log=lambda s: None, confirm=lambda q: True)
     assert a.run("click it").startswith("stopped: mouse moved into a screen corner")
+
+
+def test_shot_maps_through_the_display_origin():
+    # A screenshot of a second display at (-1920, -200), 1920 points wide, sent at 960 pixels.
+    s = FakeShot()
+    s.ox, s.oy, s.scale = -1920, -200, 2.0
+    assert s.point(100, 50) == (-1720, -100)
+    assert s.pixel(-1720, -100) == (100, 50)

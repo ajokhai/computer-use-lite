@@ -44,6 +44,15 @@ def _ask_ax():
     AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})  # adds the app to the list and opens it
 
 
+def _reset_ax():
+    """Forget this app's Accessibility entry. An entry left by an older build with a different
+    signature shows as switched on but doesn't count, and macOS won't replace it by itself."""
+    from Foundation import NSBundle
+    bundle_id = NSBundle.mainBundle().bundleIdentifier()
+    if bundle_id:
+        subprocess.run(["/usr/bin/tccutil", "reset", "Accessibility", bundle_id], capture_output=True)
+
+
 def _screen() -> bool:
     from Quartz import CGPreflightScreenCaptureAccess
     return bool(CGPreflightScreenCaptureAccess())
@@ -94,6 +103,9 @@ PERMISSIONS = [
 ]
 
 
+AX_STALE_HINT = "Already on in Settings? That's left from an older version: click Allow again to replace it."
+
+
 def missing_required() -> list[str]:
     """Titles of required permissions this app doesn't have yet."""
     out = []
@@ -130,6 +142,7 @@ class Onboarding(NSObject):
         self.app = app  # the menu bar app: for API Keys… and saving settings
         self.rows = {}
         self.asked_screen = False
+        self.asked_ax = 0  # times Allow was clicked for Accessibility
         self.timer = None
         self._build()
         return self
@@ -174,16 +187,16 @@ class Onboarding(NSObject):
         nxt.setFrame_(NSMakeRect(PAD, y - 18, WIDTH - 2 * PAD, 18))
         content.addSubview_(nxt)
         y -= 22
-        tips = _label("Add a Jev or vision model key to run tasks from the bar (Settings › API Keys…). "
-                      "To let Claude, Cursor or another AI app drive your Mac, use Connect AI Apps in the menu; "
-                      "that app needs Accessibility and Screen Recording too.",
+        tips = _label("No API key needed: use Connect AI Apps in the menu, and the AI you're signed into in "
+                      "Claude, Antigravity, VS Code or Cursor drives your Mac (that app needs Accessibility and "
+                      "Screen Recording too). Or add a model key to use the bar's built-in agent.",
                       12, NSColor.secondaryLabelColor())
         tips.setFrame_(NSMakeRect(PAD, y - 46, WIDTH - 2 * PAD, 46))
         content.addSubview_(tips)
 
         self.done = NSButton.buttonWithTitle_target_action_("Done", self, "doneClicked:")
         self.done.setKeyEquivalent_("\r")
-        self.keys = NSButton.buttonWithTitle_target_action_("Add API Keys…", self, "keysClicked:")
+        self.keys = NSButton.buttonWithTitle_target_action_("Add a Model Key…", self, "keysClicked:")
         self.relaunch = NSButton.buttonWithTitle_target_action_("Relaunch Computer Use", self, "relaunchClicked:")
         for b in (self.done, self.keys, self.relaunch):
             b.sizeToFit()
@@ -219,7 +232,7 @@ class Onboarding(NSObject):
         detail = _label(desc, 12, NSColor.secondaryLabelColor())
         detail.setFrame_(NSMakeRect(x, y + 6, WIDTH - x - PAD - bw - 12, 32))
         content.addSubview_(detail)
-        return {"icon": icon, "button": button, "required": required}
+        return {"icon": icon, "button": button, "required": required, "detail": detail, "desc": desc}
 
     # --- status ----------------------------------------------------------------
 
@@ -246,6 +259,11 @@ class Onboarding(NSObject):
         screen_ok = self.rows["screen"]["button"].isHidden()
         self.relaunch.setHidden_(screen_ok or not self.asked_screen or integration.app_bundle() is None)
         self.done.setTitle_("Done" if all_required else "Finish Later")
+        # Still off after asking: most likely a leftover entry from an older build. Say so in its row.
+        ax = self.rows["accessibility"]
+        stale = not ax["button"].isHidden() and self.asked_ax > 0
+        ax["detail"].setStringValue_(AX_STALE_HINT if stale else ax["desc"])
+        ax["detail"].setTextColor_(NSColor.systemOrangeColor() if stale else NSColor.secondaryLabelColor())
 
     def tick_(self, timer):
         self.refresh()
@@ -274,6 +292,10 @@ class Onboarding(NSObject):
         key = sender.identifier()
         if key == "screen":
             self.asked_screen = True
+        if key == "accessibility":
+            self.asked_ax += 1
+            if self.asked_ax > 1:  # asked before and still not on: clear a stale entry, then ask afresh
+                _reset_ax()
         next(ask for k, *_rest, ask in PERMISSIONS if k == key)()
         self.refresh()
 

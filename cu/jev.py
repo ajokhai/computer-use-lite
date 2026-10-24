@@ -85,14 +85,15 @@ class Jev:
         import base64
         import io
         from PIL import Image
-        from .screen import screenshot_png, screen_size
+        from .screen import active_display, capture
 
         if png_bytes is None:
-            png_bytes = screenshot_png(max_width=1440)
+            png_bytes, (ox, oy, sw, sh) = capture(max_width=1440)
+        else:
+            ox, oy, sw, sh = active_display()
 
         im = Image.open(io.BytesIO(png_bytes))
         img_w, img_h = im.size
-        sw, sh = screen_size()
         scale_x = sw / img_w
         scale_y = sh / img_h
 
@@ -116,10 +117,10 @@ class Jev:
                 left = float(box["left"])
                 right = float(box["right"])
 
-                x1 = left * img_w * scale_x
-                x2 = right * img_w * scale_x
-                y1 = top * img_h * scale_y
-                y2 = bottom * img_h * scale_y
+                x1 = ox + left * img_w * scale_x
+                x2 = ox + right * img_w * scale_x
+                y1 = oy + top * img_h * scale_y
+                y2 = oy + bottom * img_h * scale_y
 
                 cx = int((x1 + x2) / 2)
                 cy = int((y1 + y2) / 2)

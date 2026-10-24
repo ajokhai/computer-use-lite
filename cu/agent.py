@@ -300,9 +300,9 @@ class Agent:
         elif op in ("SCROLL_DOWN", "SCROLL_UP"):
             x, y = (el.x, el.y) if el else (None, None)
             if x is None:
-                from .screen import screen_size
-                w, h = screen_size()
-                x, y = w // 2, h // 2
+                from .screen import active_display
+                dx, dy, w, h = active_display()
+                x, y = dx + w // 2, dy + h // 2
             actions.scroll(x, y, "down" if op == "SCROLL_DOWN" else "up", 400)
         elif op == "OPEN_APP":
             urls = re.findall(r'https?://[^\s,;"\']+|www\.[^\s,;"\']+', task)
