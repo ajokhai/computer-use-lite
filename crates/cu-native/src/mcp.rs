@@ -46,6 +46,36 @@ pub struct Server<D: Desktop> {
     oy: f64,
     lessons: Store,
     skills: Skills,
+    /// One line per tool call (for timing, diagnosis and learning); None in tests.
+    log: Option<std::path::PathBuf>,
+}
+
+const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024; // then rotated to mcp.log.1, like the app's logs
+
+/// UTC "YYYY-MM-DD HH:MM:SS" for a Unix time (no date library needed).
+fn utc(secs: u64) -> String {
+    let (days, rem) = ((secs / 86400) as i64, secs % 86400);
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// Arguments for the log: strings cut to 60 characters (typed text may be private), no images.
+fn short_args(args: &Value) -> String {
+    match args {
+        Value::String(s) => Value::String(truncate_chars(s, 60)).to_string(),
+        Value::Object(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{k}: {}", short_args(v))).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!("[{}]", a.iter().take(10).map(short_args).collect::<Vec<_>>().join(", ")),
+        v => v.to_string(),
+    }
 }
 
 /// A tool's outcome: content blocks, and whether it failed.
@@ -191,7 +221,8 @@ impl<D: Desktop> Server<D> {
         let (w, _) = desk.main_display();
         let scale = if w > DEFAULT_SHOT_WIDTH as f64 { w / DEFAULT_SHOT_WIDTH as f64 } else { 1.0 };
         Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0,
-                 lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()) }
+                 lessons: Store::new(lessons::default_dir()), skills: Skills::new(lessons::default_dir()),
+                 log: std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs/Computer Use/mcp.log")) }
     }
 
     /// Keep lessons somewhere else (tests).
@@ -199,6 +230,27 @@ impl<D: Desktop> Server<D> {
         self.lessons = Store::new(dir.clone());
         self.skills = Skills::new(dir);
         self
+    }
+
+    /// Write the call log somewhere else, or nowhere (None).
+    pub fn with_log(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.log = path;
+        self
+    }
+
+    fn log_call(&self, name: &str, args: &Value, outcome: &str, ms: u128) {
+        use std::io::Write as _;
+        let Some(path) = &self.log else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
+            let _ = std::fs::rename(path, path.with_extension("log.1"));
+        }
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{} {name} {} {outcome} {ms}ms", utc(secs), short_args(args));
+        }
     }
 
     /// The places a call is about: the given app/site name(s) plus the frontmost app.
@@ -612,8 +664,15 @@ impl<D: Desktop> Server<D> {
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                let t0 = Instant::now();
                 let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.call(name, &args)))
                     .unwrap_or_else(|_| Err(format!("internal error in {name}")));
+                let outcome = match &reply {
+                    Ok(r) if !r.is_error => "ok".to_string(),
+                    Ok(r) => format!("error: {}", truncate_chars(r.content.first().and_then(|c| c["text"].as_str()).unwrap_or(""), 120)),
+                    Err(e) => format!("error: {}", truncate_chars(e, 120)),
+                };
+                self.log_call(name, &args, &outcome.replace('\n', " "), t0.elapsed().as_millis());
                 match reply {
                     Ok(r) => json!({"content": r.content, "isError": r.is_error}),
                     Err(e) if e.starts_with("unknown tool") => return Some(error(id, -32602, &e)),

@@ -129,7 +129,7 @@ fn call(s: &mut Server<Fake>, name: &str, args: Value) -> (String, bool, Value) 
 fn server() -> Server<Fake> {
     let dir = std::env::temp_dir().join(format!("cu-mcp-test-{}-{:?}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);
-    Server::new(fake()).with_lessons_dir(dir)
+    Server::new(fake()).with_lessons_dir(dir).with_log(None)
 }
 
 #[test]
@@ -406,4 +406,22 @@ fn skills_round_trip_through_the_tools() {
     assert!(text.starts_with("Skill \"Post on X\" (x.com):\n  1. Click the compose box"), "{text}");
     let (_, err, _) = call(&mut s, "save_skill", json!({"name": "Empty", "steps": []}));
     assert!(err);
+}
+
+#[test]
+fn every_tool_call_is_logged_with_its_outcome_and_time() {
+    let path = std::env::temp_dir().join(format!("cu-mcp-log-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let mut s = server().with_log(Some(path.clone()));
+    call(&mut s, "type_text", json!({"text": "x".repeat(200)}));
+    call(&mut s, "click_element", json!({"element": "e99"}));
+    let log = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 2, "{log}");
+    assert!(lines[0].contains(" type_text {text: ") && lines[0].contains(" ok ") && lines[0].ends_with("ms"), "{}", lines[0]);
+    assert!(lines[0].len() < 140, "typed text is shortened in the log");
+    assert!(lines[1].contains(" click_element ") && lines[1].contains("error: no element e99"), "{}", lines[1]);
+    assert_eq!(utc(0), "1970-01-01 00:00:00");
+    assert_eq!(utc(1_792_812_345), "2026-10-24 03:25:45");
+    let _ = std::fs::remove_file(&path);
 }

@@ -186,6 +186,10 @@ pub const ACTIONABLE: &[&str] = &[
 ];
 pub const MAX_LABEL_CHARS: usize = 80;
 const WALK_TIMEOUT_MS: u128 = 2500;
+/// Text inputs are kept even past the budget (a page's main box can sit below a long feed),
+/// up to this many extra, replacing plain text at the end of the list.
+const TEXT_INPUTS: &[&str] = &["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"];
+const MAX_EXTRA_INPUTS: usize = 8;
 /// Chrome around the content: walked after everything else, so a browser's tabs, bookmarks and
 /// toolbar can't use up the element budget before the page itself is reached.
 const DEFERRED: &[&str] = &["AXToolbar", "AXTabGroup", "AXMenuBar"];
@@ -319,6 +323,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
     // (element, depth, already deferred once)
     let mut stack: Vec<(CfRef, usize, bool)> = roots.into_iter().rev().map(|r| (r, 0, false)).collect();
     let mut later: Vec<(CfRef, usize, bool)> = Vec::new();
+    let mut extra_inputs = 0usize;
 
     loop {
         let Some((el, depth, deferred)) = stack.pop() else {
@@ -329,10 +334,13 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
             stack = later.drain(..).rev().collect();
             continue;
         };
-        if elements.len() >= max_elements || depth > 40 || t0.elapsed().as_millis() > WALK_TIMEOUT_MS {
+        // Past the budget, keep looking only for text inputs (bounded by the timeout and MAX_EXTRA_INPUTS).
+        let full = elements.len() >= max_elements;
+        if (full && extra_inputs >= MAX_EXTRA_INPUTS) || depth > 40 || t0.elapsed().as_millis() > WALK_TIMEOUT_MS {
             continue; // `el` drops here; draining the stacks releases everything else
         }
         let role = copy_attr(&el, &k_role).map(|r| string_of(r.ptr())).unwrap_or_default();
+        let wanted = !full || TEXT_INPUTS.contains(&role.as_str());
         saw_page |= role == "AXWebArea";
         let landmark = || {
             role == "AXGroup"
@@ -343,7 +351,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
             continue;
         }
 
-        if ACTIONABLE.contains(&role.as_str()) {
+        if wanted && ACTIONABLE.contains(&role.as_str()) {
             let subrole = if role == "AXButton" { copy_attr(&el, &k_subrole).map(|r| string_of(r.ptr())).unwrap_or_default() } else { String::new() };
             let raw = match window_button_label(&subrole) {
                 Some(l) => l.to_string(),
@@ -360,7 +368,7 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
                     && seen.insert((role.clone(), label.clone(), cx as i32, cy as i32))
                 {
                     elements.push(NativeElement {
-                        id: format!("e{}", elements.len()),
+                        id: String::new(), // numbered once the list is final
                         role: role.clone(),
                         label,
                         x: cx as i32,
@@ -372,6 +380,9 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
                     if keep_refs {
                         refs.push(el.clone());
                     }
+                    if full {
+                        extra_inputs += 1;
+                    }
                 }
             }
         }
@@ -382,6 +393,26 @@ fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
             kids.truncate(12);
         }
         stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1, deferred)));
+    }
+
+    // Make room for inputs found past the budget: drop plain text and images from the end first,
+    // then any non-input, so the list stays within max_elements.
+    for plain_only in [true, false] {
+        let mut i = elements.len();
+        while elements.len() > max_elements && i > 0 {
+            i -= 1;
+            let role = elements[i].role.as_str();
+            let droppable = !TEXT_INPUTS.contains(&role) && (!plain_only || matches!(role, "AXStaticText" | "AXImage"));
+            if droppable {
+                elements.remove(i);
+                if keep_refs {
+                    refs.remove(i);
+                }
+            }
+        }
+    }
+    for (i, e) in elements.iter_mut().enumerate() {
+        e.id = format!("e{i}");
     }
 
     let snap = Snapshot {
