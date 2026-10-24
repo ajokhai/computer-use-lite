@@ -1,4 +1,5 @@
-"""Hooking the app into the rest of the Mac: open at login, and Antigravity/Claude MCP configs."""
+"""Hooking the app into the rest of the Mac: open at login, and the MCP configs of AI apps
+(Antigravity, VS Code, Cursor, Windsurf, Claude) so any of them can drive the Mac with cu-mcp."""
 
 import json
 import plistlib

@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_NAME = "Computer Use"
 DATA = Path.home() / "Library" / "Application Support" / APP_NAME
-LOG = Path.home() / "Library" / "Logs" / "computer-use.log"
+LOG = Path.home() / "Library" / "Logs" / "Computer Use" / "tasks.log"  # rotated like app.log (cu/logger.py)
 KEYCHAIN_SERVICE = "computer-use-lite"
 KEYS = ("TYPESAFE_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN")
 KEY_INFO = {  # label, where to get it

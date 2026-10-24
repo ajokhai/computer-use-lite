@@ -19,7 +19,7 @@ from AppKit import (
 from . import __version__, integration, say, updater, usage, voicepack
 from .config import KEY_INFO, KEYS, LOG, get_key, load_keys, load_settings, save_settings, set_key
 from .shortcut import PRESETS, Detector, Shortcut
-from .logger import CRASH_LOG, setup_logging
+from .logger import CRASH_LOG, rotate, setup_logging
 
 setup_logging()
 
@@ -34,7 +34,7 @@ class MenuBar(rumps.App):
         self.events: queue.Queue = queue.Queue()
         self.agent = None
         self.listener = None  # created on first use, so the mic is never touched unless you ask
-        self.direct = False  # this utterance needs no wake word (Talk / ⌃⌥Space)
+        self.direct = False  # this utterance needs no wake word (the shortcut or the mic button)
         self.voice_task = False
         self.pending = None
         self.awaiting_confirm = False
@@ -105,7 +105,7 @@ class MenuBar(rumps.App):
             self.auto_update_item,
             None,
             rumps.MenuItem("Open Log", callback=lambda _: _open(LOG)),
-            rumps.MenuItem("Open Crash Logs", callback=lambda _: _open(CRASH_LOG.parent)),
+            rumps.MenuItem("Open Logs Folder", callback=lambda _: _open(CRASH_LOG.parent)),
             None,
             rumps.MenuItem(f"Version {__version__}", callback=None),
         ])
@@ -803,6 +803,9 @@ class MenuBar(rumps.App):
 
     def log(self, line: str):
         LOG.parent.mkdir(parents=True, exist_ok=True)
+        self._log_writes = getattr(self, "_log_writes", 0) + 1
+        if self._log_writes % 200 == 0:
+            rotate(LOG)
         with LOG.open("a") as f:
             f.write(line + "\n")
         self.events.put(("status", line.strip()))

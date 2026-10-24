@@ -169,7 +169,7 @@ class LocalListener:
                 self._close()
                 self.events.put(("final", text))
                 return
-        if self._end and self.listening:  # Talk pressed again before any speech
+        if self._end and self.listening:  # the user ended it before any speech
             self._close()
             self.events.put(("final", ""))
 
@@ -187,7 +187,7 @@ class LocalListener:
         pass
 
     def _finish(self):
-        """End the utterance now (Talk pressed again); what was said so far is still transcribed."""
+        """End the utterance now (the user ended it); what was said so far is still transcribed."""
         self._end = True
 
     def stop(self):
