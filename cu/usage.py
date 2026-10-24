@@ -3,6 +3,7 @@ remembers when a provider said it was out of quota. Shared across processes via 
 
 import fcntl
 import json
+import re
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .config import DATA, load_settings
 
-PACIFIC = ZoneInfo("America/Los_Angeles")  # Gemini daily quotas reset at midnight Pacific
+PACIFIC = ZoneInfo("America/Los_Angeles")  # Gemini daily quotas reset at midnight Pacific; other models count per Pacific day too
 JEV_USD_PER_TOKEN = 0.042 / 1e6
 FILE = DATA / "usage.json"
 
@@ -22,7 +23,7 @@ class QuotaExhausted(Exception):
 
 
 def next_reset(provider: str, now: datetime | None = None) -> datetime:
-    """End of the current window: midnight Pacific for Gemini, the monthly reset day for Jev."""
+    """End of the current window: the monthly reset day for Jev, midnight Pacific for every vision model."""
     if provider == "jev":
         day = int(load_settings()["limits"].get("jev", {}).get("reset_day") or 1)
         now = now or datetime.now().astimezone()
@@ -126,7 +127,22 @@ def fmt_until(ts: float) -> str:
 
 
 def pretty(provider: str) -> str:
-    return "Jev" if provider == "jev" else "Gemini " + provider.removeprefix("gemini-").replace("-", " ").title()
+    """A usage id as people read it: "claude-opus-5-5" → "Claude Opus 5.5", "gpt-6.1-sol" → "GPT-6.1 Sol",
+    "local:qwen2.5vl" → "Local qwen2.5vl"."""
+    if provider == "jev":
+        return "Jev"
+    if ":" in provider:
+        kind, name = provider.split(":", 1)
+        return f"{ {'openrouter': 'OpenRouter', 'local': 'Local'}.get(kind, kind.title()) } {name}"
+    if provider.startswith("gemini-"):
+        return "Gemini " + provider.removeprefix("gemini-").replace("-", " ").title()
+    if provider.startswith("claude-"):
+        name = re.sub(r"-(\d+)-(\d+)$", r" \1.\2", provider.removeprefix("claude-"))
+        return "Claude " + name.replace("-", " ").title()
+    if provider.startswith("gpt-"):
+        head, _, rest = provider.removeprefix("gpt-").partition("-")
+        return f"GPT-{head}" + (" " + rest.replace("-", " ").title() if rest else "")
+    return provider
 
 
 def summary_lines(models: list[str]) -> list[str]:

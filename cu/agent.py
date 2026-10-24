@@ -1,4 +1,5 @@
-"""The task loop, in three modes (named by role; the vision model is currently Gemini):
+"""The task loop, in three modes (named by role; the vision model is Claude, OpenAI, Gemini, an
+OpenRouter model or a local one, whichever is chosen or available; see cu/vision/):
 
 hybrid  The vision model plans a few atomic steps from a screenshot, Jev grounds each step to
         an accessibility element for a fraction of a cent, the vision model takes any step Jev
@@ -19,42 +20,25 @@ from typing import Callable
 
 from . import actions, narrate, usage
 from .config import load_settings
-from .gemini import Gemini
+from . import vision
 from .jev import Jev, installed_apps, text_candidates
-from .screen import Element, _load_native_lib, ax_elements
+from .screen import Element, ax_elements
+from .vision import Vision
+from .vision.base import RISKY_WORDS, is_risky_action  # noqa: F401  (re-exported)
 
 GROUNDED = {"click", "double_click", "type", "scroll"}
 
 
-RISKY_WORDS = ("send", "buy", "pay", "purchase", "order", "delete", "remove", "submit", "post",
-               "publish", "transfer", "confirm", "checkout", "place order", "erase", "trash")
-
-
-def is_risky_action(op: str, label: str = "", detail: str = "") -> bool:
-    """Evaluate whether an action is risky and warrants user confirmation (native Rust backend)."""
-    lib = _load_native_lib()
-    if lib and hasattr(lib, "cu_is_risky_action"):
-        try:
-            return bool(lib.cu_is_risky_action(op.encode("utf-8"), label.encode("utf-8"), detail.encode("utf-8")))
-        except Exception:
-            pass
-    combined = f"{op} {label} {detail}".lower()
-    return any(w in combined for w in RISKY_WORDS)
-
-
-def _has_gemini() -> bool:
-    return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+def _has_vision() -> bool:
+    return vision.configured()
 
 
 def _has_jev() -> bool:
     return bool(os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY"))
 
 
-def _gemini_ok() -> bool:
-    if not _has_gemini():
-        return False
-    s = load_settings()
-    return any(usage.available(m) for m in (s["gemini_models"] if s["auto_switch"] else s["gemini_models"][:1]))
+def _vision_ok() -> bool:
+    return vision.available()
 
 
 def _jev_ok() -> bool:
@@ -75,16 +59,16 @@ def pick_mode(mode: str = "auto") -> str:
     mode = normalize_mode(mode)
     if mode != "auto":
         return mode
-    gemini, jev = _gemini_ok(), _jev_ok()
-    if gemini and jev:
+    seeing, jev = _vision_ok(), _jev_ok()
+    if seeing and jev:
         return "hybrid"
     if jev:
         return "jev"
-    if gemini:
+    if seeing:
         return "vision"
-    if _has_gemini() or _has_jev():
+    if _has_vision() or _has_jev():
         raise RuntimeError("Every configured model is out of quota right now (see Usage in the menu)")
-    raise RuntimeError("Add a Jev and/or vision model key (menu › API Keys…), or connect an AI app "
+    raise RuntimeError("Add a Jev and/or vision model key (menu › Settings › API Keys…), or connect an AI app "
                        "(menu › Connect AI Apps) to drive the Mac with any model, no key needed")
 
 
@@ -106,9 +90,9 @@ class Agent:
     log: Callable[[str], None] = print
     narrate: Callable[[str], None] = lambda text: None  # short spoken updates while working
     max_jev_actions: int = 40
-    gemini: Gemini | None = None
+    vision: Vision | None = None
     jev: Jev | None = None
-    stats: dict = field(default_factory=lambda: {"jev_steps": 0, "gemini_steps": 0, "direct_steps": 0})
+    stats: dict = field(default_factory=lambda: {"jev_steps": 0, "vision_steps": 0, "direct_steps": 0})
     stop: threading.Event = field(default_factory=threading.Event)
     auto_switch: bool | None = None  # None: use the setting
 
@@ -121,9 +105,13 @@ class Agent:
     def _clients(self):
         if self.jev is None and self.mode in ("hybrid", "jev"):
             self.jev = Jev()
-        if self.gemini is None and (self.mode in ("hybrid", "vision") or _gemini_ok()):
+        if self.vision is None and (self.mode in ("hybrid", "vision") or _vision_ok()):
             # jev mode can still escalate to the vision model when stuck
-            self.gemini = Gemini(auto_switch=self.auto_switch, log=self.log)
+            self.vision = Vision(auto_switch=self.auto_switch, log=self.log)
+
+    def _see(self, task: str, max_turns: int) -> tuple[bool, str]:
+        return self.vision.act(task, max_turns=max_turns, confirm=self.confirm, log=self.log, stop=self.stop,
+                               narrate=self.narrate, allow_risky=self.allow_risky, confirm_all=self.confirm_all)
 
     def run(self, task: str) -> str:
         """Run the task, moving to another provider when one runs out of quota (if auto-switch is on)."""
@@ -134,13 +122,13 @@ class Agent:
             except actions.pyautogui.FailSafeException:
                 return self._report("stopped: mouse moved into a screen corner")
             except usage.QuotaExhausted as e:
-                if e.provider == "gemini" and self.mode == "jev":
+                if e.provider != "jev" and self.mode == "jev":
                     self.log("  the vision model is out of quota; Jev carries on alone")
-                    self.gemini = None
+                    self.vision = None
                     continue
                 alt = None
                 if self.auto_switch:
-                    alt = "vision" if e.provider == "jev" and _gemini_ok() else "jev" if e.provider == "gemini" and _jev_ok() else None
+                    alt = "vision" if e.provider == "jev" and _vision_ok() else "jev" if e.provider != "jev" and _jev_ok() else None
                 if alt is None:
                     back = f" · back in {usage.fmt_until(e.until)}" if e.until else ""
                     return self._report(f"stopped: {e}{back}")
@@ -155,14 +143,14 @@ class Agent:
         if self.mode == "jev":
             return self.run_jev(task)
         if self.mode == "vision":
-            ok, msg = self.gemini.act(task, max_turns=40, confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
+            ok, msg = self._see(task, max_turns=40)
             return self._report(msg)
 
         history: list[str] = []
         for round_ in range(self.max_rounds):
             if self.stop.is_set():
                 return self._report("stopped by user")
-            plan = self.gemini.plan(task, history)
+            plan = self.vision.plan(task, history)
             status, steps = plan.get("status", "continue"), plan.get("steps") or []
             self.log(f"[plan {round_ + 1}] {status}: {plan.get('summary', '')}")
             if status == "continue" and plan.get("summary"):
@@ -224,17 +212,16 @@ class Agent:
 
             # Stuck: Jev says so, keeps missing, or repeats the same action three times.
             stuck = op == "BLOCKED" or misses >= 3 or (len(recent) == 3 and len(set(recent)) == 1)
-            if stuck or (self.mode != "jev" and self.gemini and d["op_p"] < 0.35):
-                if self.mode == "jev" or not self.gemini or not _gemini_ok():
+            if stuck or (self.mode != "jev" and self.vision and d["op_p"] < 0.35):
+                if self.mode == "jev" or not self.vision or not _vision_ok():
                     ok_verified, why = self.verify_done(task, app, els, history)
                     if ok_verified and history:
                         return self._report(f"done ({why})")
-                    hint = "" if _has_gemini() else "; add a vision model key so it can take over"
+                    hint = "" if _has_vision() else "; add a vision model key so it can take over"
                     return self._report(f"blocked: Jev is stuck at '{desc}'{hint}")
-                self.stats["gemini_steps"] += 1
-                ok, msg = self.gemini.act(f"Task: {task}\nDone so far: {history[-8:]}\nDo the next step or two, then stop.",
-                                          max_turns=6, confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
-                history.append(f"gemini: {msg}")
+                self.stats["vision_steps"] += 1
+                ok, msg = self._see(f"Task: {task}\nDone so far: {history[-8:]}\nDo the next step or two, then stop.", 6)
+                history.append(f"vision model: {msg}")
                 recent.clear()
                 misses = 0
                 continue
@@ -394,10 +381,9 @@ class Agent:
         return (p >= 0.4), f"(expect p={p:.2f})"
 
     def _fallback(self, s: dict, why: str) -> tuple[bool, str]:
-        self.log(f"    {why} → gemini vision")
-        self.stats["gemini_steps"] += 1
-        ok, msg = self.gemini.act(f"Do exactly this one step, then stop: {_fmt(s)}", max_turns=6,
-                                  confirm=self.confirm, log=self.log, stop=self.stop, narrate=self.narrate)
+        self.log(f"    {why} → vision model")
+        self.stats["vision_steps"] += 1
+        ok, msg = self._see(f"Do exactly this one step, then stop: {_fmt(s)}", 6)
         return ok, f"({msg})"
 
     def _report(self, msg: str) -> str:
@@ -406,10 +392,9 @@ class Agent:
             indicator.hide_cursor_active(delay=0.1)
         except Exception:
             pass
-        g = self.gemini
         lines = [msg, f"mode: {self.mode}, steps: {self.stats}"]
-        if g:
-            lines.append(f"gemini: {g.calls} calls, {g.input_tokens} in / {g.output_tokens} out tokens")
+        if self.vision:
+            lines += self.vision.report()
         if self.jev:
             lines.append(f"jev: {self.jev.input_tokens} tokens ≈ ${self.jev.cost_usd:.5f}")
         out = "\n".join(lines)

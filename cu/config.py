@@ -9,10 +9,14 @@ APP_NAME = "Computer Use"
 DATA = Path.home() / "Library" / "Application Support" / APP_NAME
 LOG = Path.home() / "Library" / "Logs" / "Computer Use" / "tasks.log"  # rotated like app.log (cu/logger.py)
 KEYCHAIN_SERVICE = "computer-use-lite"
-KEYS = ("TYPESAFE_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN")
+KEYS = ("TYPESAFE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+        "GITHUB_TOKEN")
 KEY_INFO = {  # label, where to get it
     "TYPESAFE_API_KEY": ("Jev (TypeSafe)", "Cheapest actions. From your TypeSafe dashboard."),
-    "GEMINI_API_KEY": ("Gemini", "Planning, vision and Gemini voices. aistudio.google.com/apikey"),
+    "ANTHROPIC_API_KEY": ("Claude (Anthropic)", "Vision model. platform.claude.com › API keys"),
+    "OPENAI_API_KEY": ("OpenAI", "Vision model. platform.openai.com/api-keys"),
+    "GEMINI_API_KEY": ("Gemini", "Vision model and Gemini voices. aistudio.google.com/apikey"),
+    "OPENROUTER_API_KEY": ("OpenRouter", "Any model OpenRouter offers (pick it under Mode › Vision Model). openrouter.ai/keys"),
     "GITHUB_TOKEN": ("GitHub token", "Only for updates from a private repo when the gh CLI isn't signed in."),
 }
 
@@ -33,7 +37,17 @@ DEFAULTS = {
     "speaking_voice": "mac:",  # "mac:<name>" (empty = system voice), "kokoro:<id>", or "gemini:<name>" (see cu/say.py)
     "speech_engine": "apple",  # "apple" or a model id like "moonshine:base" (see cu/stt.py)
     "custom_speech_models": [],  # model ids added with Voice Engine › Add Custom Model…
+    # The vision model plans (Vision + Jev) and does vision computer use (Vision Only).
+    # "auto" = the first provider in vision_order with a key and quota left; or a model id
+    # from one of the lists below, "openrouter:<model>" or "local:<model>" (see cu/vision/).
+    "vision_model": "auto",
+    "vision_order": ["claude", "openai", "gemini", "openrouter", "local"],
+    "claude_models": ["claude-opus-5-5", "claude-sonnet-5-5"],
+    "openai_models": ["gpt-6.1-sol"],
     "gemini_models": ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview"],
+    "openrouter_model": "",  # e.g. a vision model's OpenRouter id; empty = OpenRouter unused
+    "local_model": "",  # model name on the local server; empty = local unused
+    "local_url": "http://localhost:11434/v1",  # any OpenAI-compatible server (Ollama, LM Studio…)
     # Neither provider exposes remaining quota, so these come from your dashboards.
     # None means "unknown": usage is still counted, just not shown against a limit.
     "limits": {

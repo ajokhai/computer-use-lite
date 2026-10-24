@@ -43,14 +43,19 @@ def jev_op(op: str, element_label: str = "", text: str = "", app: str = "") -> s
     }.get(op, "")
 
 
-def gemini_action(name: str, args: dict) -> str:
-    """Gemini's own one-line reason for the action when it gives one."""
+def vision_action(name: str, args: dict) -> str:
+    """A vision model's action, in its own words when it gives a reason (Gemini's "intent")."""
     if args.get("intent"):
         return _clip(args["intent"], 14)
     if name == "type":
         return f"Typing {_clip(args.get('text', ''), 6)}"
     if name == "open_app":
-        return f"Opening {args.get('app_name', '')}"
+        return f"Opening {args.get('app_name') or args.get('app', '')}"
+    if name == "open_url":
+        return "Opening the page"
     if name == "scroll":
-        return f"Scrolling {args.get('direction', 'down')}"
+        return f"Scrolling {args.get('direction') or args.get('scroll_direction', 'down')}"
     return ""
+
+
+gemini_action = vision_action  # the old name

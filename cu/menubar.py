@@ -56,6 +56,9 @@ class MenuBar(rumps.App):
         mode_menu = rumps.MenuItem("Mode")
         for item in self.modes.values():
             mode_menu.add(item)
+        self.vision_menu = rumps.MenuItem("Vision Model")
+        mode_menu.add(rumps.separator)
+        mode_menu.add(self.vision_menu)
 
         self.toggles = {
             "open_listening": rumps.MenuItem("Start Listening When the Bar Opens", callback=self.toggle),
@@ -153,6 +156,7 @@ class MenuBar(rumps.App):
         self.build_engine_menu(has_pack)
         self.build_voice_out_menu(has_pack)
         self.build_shortcut_menu()
+        self.build_vision_menu()
         self.pack_item.title = "Remove Voice Pack…" if voicepack.HELPER.exists() else "Install Voice Pack…"
         self.pack_item.set_callback(None if (has_pack and not voicepack.HELPER.exists()) else self.toggle_pack)
         for key, item in self.toggles.items():
@@ -171,21 +175,23 @@ class MenuBar(rumps.App):
     def refresh_usage(self):
         if self.usage_menu._menu is not None and len(self.usage_menu):
             self.usage_menu.clear()
-        providers = [*self.settings["gemini_models"], "jev"]
-        lines = usage.summary_lines(self.settings["gemini_models"])
-        any_out = False
-        for provider, line in zip(providers, lines):
-            has_key = _env_key(provider)
-            cb = (lambda _, p=provider: self.open_dashboard(p)) if has_key else (lambda _: self.edit_keys(None))
-            title = line if has_key else f"{usage.pretty(provider)}: no API key (click to add)"
-            item = rumps.MenuItem(title, callback=cb)
-            self.usage_menu.add(item)
-            any_out |= has_key and not usage.status(provider)["available"]
+        from . import vision
+        used = [m for p in vision.PROVIDERS if vision.has_key(p) for m in vision.models(p, self.settings)]
+        for model, line in zip([*used, "jev"], usage.summary_lines(used)):
+            if model == "jev" and not _env_key("jev"):
+                line = "Jev: no API key (click to add)"
+            p = "jev" if model == "jev" else vision.provider_of(model)
+            cb = (lambda _, p=p: self.open_dashboard(p)) if model != "jev" or _env_key("jev") else (lambda _: self.edit_keys(None))
+            self.usage_menu.add(rumps.MenuItem(line, callback=cb))
+        missing = [vision.LABELS[p] for p in vision.PROVIDERS if p != "local" and not vision.has_key(p)]
+        if missing:
+            self.usage_menu.add(rumps.MenuItem(f"No key yet: {', '.join(missing)} (click to add)",
+                                               callback=lambda _: self.edit_keys(None)))
         self.usage_menu.add(rumps.separator)
         self.usage_menu.add(rumps.MenuItem("Click a line to open its online dashboard", callback=None))
         limits_menu = rumps.MenuItem("Set Budget / Limits")
         limits_menu.add(rumps.MenuItem("Jev Monthly Budget…", callback=lambda _: self.set_limit("jev")))
-        for m in self.settings["gemini_models"]:
+        for m in used:
             limits_menu.add(rumps.MenuItem(f"{usage.pretty(m)} Daily Limit…", callback=lambda _, mod=m: self.set_limit(mod)))
         self.usage_menu.add(limits_menu)
         self.usage_menu.add(rumps.MenuItem("Clear “out of quota” flags", callback=self.clear_flags))
@@ -194,8 +200,11 @@ class MenuBar(rumps.App):
 
     def open_dashboard(self, provider: str):
         import webbrowser
-        url = "https://console.typesafe.ai" if provider == "jev" else "https://aistudio.google.com"
-        webbrowser.open(url)
+        url = {"jev": "https://console.typesafe.ai", "gemini": "https://aistudio.google.com",
+               "claude": "https://platform.claude.com", "openai": "https://platform.openai.com/usage",
+               "openrouter": "https://openrouter.ai/activity"}.get(provider)
+        if url:
+            webbrowser.open(url)
 
     def set_mode(self, mode):
         self.settings["mode"] = mode
@@ -400,7 +409,8 @@ class MenuBar(rumps.App):
         else:
             v = self._prompt(usage.pretty(provider),
                              "Daily request limit for this model (blank = no limit).\n"
-                             "Resets at midnight Pacific time.", str(limits.get("requests_per_day") or ""))
+                             "Counted by this app; resets at midnight Pacific time.",
+                             str(limits.get("requests_per_day") or ""))
             if v is None:
                 return
             try:
@@ -412,6 +422,62 @@ class MenuBar(rumps.App):
 
     def show_setup(self):
         onboarding.show(self)
+
+    # --- the vision model -------------------------------------------------------
+
+    def build_vision_menu(self):
+        """Mode › Vision Model: Auto, or a specific model; providers without a key are greyed out."""
+        from . import vision
+        if self.vision_menu._menu is not None and len(self.vision_menu):
+            self.vision_menu.clear()
+        choice = self.settings.get("vision_model") or "auto"
+        auto = rumps.MenuItem("Auto: First Available", callback=lambda _: self.set_vision_model("auto"))
+        auto.state = choice == "auto"
+        self.vision_menu.add(auto)
+        for p in vision.PROVIDERS:
+            self.vision_menu.add(rumps.separator)
+            ready = vision.has_key(p)
+            hint = "" if ready else "  (needs a model)" if p == "local" else "  (needs API key)"
+            self.vision_menu.add(rumps.MenuItem(vision.LABELS[p] + hint, callback=None))
+            for m in vision.models(p, self.settings):
+                item = rumps.MenuItem("   " + usage.pretty(m), callback=(lambda _, m=m: self.set_vision_model(m)) if ready else None)
+                item.state = choice == m
+                self.vision_menu.add(item)
+            if p in ("openrouter", "local"):
+                self.vision_menu.add(rumps.MenuItem(f"   Set {'OpenRouter' if p == 'openrouter' else 'Local'} Model…", callback=lambda _, p=p: self.set_compat_model(p)))
+
+    def set_vision_model(self, model: str):
+        self.settings["vision_model"] = model
+        save_settings(self.settings)
+        self.refresh()
+
+    def set_compat_model(self, provider: str):
+        """OpenRouter: any model id it lists. Local: a model on an OpenAI-compatible server."""
+        from . import vision
+        from .config import DEFAULTS
+        from .vision.compat import OPENROUTER_URL, list_models
+        if provider == "local":
+            url = self._prompt("Local Model Server", "OpenAI-compatible URL (Ollama: http://localhost:11434/v1, "
+                               "LM Studio: http://localhost:1234/v1):", self.settings.get("local_url") or "")
+            if url is None:
+                return
+            self.settings["local_url"] = url or DEFAULTS["local_url"]
+        url = self.settings["local_url"] if provider == "local" else OPENROUTER_URL
+        found = list_models(url) if provider == "local" else []
+        hint = (f"On this server: {', '.join(found[:12])}" if found else
+                "The server isn't answering; start it, or type the model name anyway.") if provider == "local" else \
+            "A vision model's id from openrouter.ai/models, e.g. provider/model-name."
+        name = self._prompt(f"{vision.LABELS[provider]}", f"Model name (blank = don't use it).\n{hint}",
+                            self.settings.get(f"{provider}_model") or (found[0] if found else ""))
+        if name is None:
+            return
+        old = self.settings.get(f"{provider}_model")
+        self.settings[f"{provider}_model"] = name
+        if self.settings.get("vision_model") in (f"{provider}:{old}",):
+            self.settings["vision_model"] = f"{provider}:{name}" if name else "auto"
+        save_settings(self.settings)
+        self.refresh()
+        self.refresh_usage()
 
     # --- the shortcut ----------------------------------------------------------
 
