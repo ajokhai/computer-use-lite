@@ -165,7 +165,7 @@ Each run's surprises became a fix in the code or a lesson in memory, so the next
 - **The working icon** turned black instead of orange and switched off while an AI was thinking. Fixed: it's drawn in color and stays on for the whole task.
 - **The cleanup check flagged files leaving the Desktop** that weren't part of the test. The owner had deleted them by hand mid-run, and the check can't yet tell a person's changes from the agent's. Next: the app records real clicks and keys while an agent works (they're distinguishable from the agent's), and the check uses that.
 - **Jev alone can't do a multi-app task like this yet.** It jumped ahead to Calendar, gave the event the wrong time, and typed text from several steps into one note. Its retry advice also told it to try a compose URL, which only makes sense in a browser; for apps it now suggests the app's shortcut or menu. Jev works best paired with a vision model.
-- **The checker had bugs too:** it wanted 69104 and rejected Gemini's correct "69,104"; deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now counts both correctly.
+- **The checker had bugs too:** it wanted 69104 and rejected Gemini's correct "69,104"; deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now handles all three.
 
 ## Ports
 Computer Use is macOS only for now. Help with a port is welcome: see the draft pull requests for [Linux](https://github.com/ajokhai/computer-use-lite/pull/1) and [Windows](https://github.com/ajokhai/computer-use-lite/pull/2). Each one links a guide to what needs replacing.
