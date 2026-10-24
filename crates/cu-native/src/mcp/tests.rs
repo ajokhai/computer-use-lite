@@ -408,6 +408,8 @@ fn skills_round_trip_through_the_tools() {
     assert!(!err && text == "saved skill \"Post on X\" for x.com", "{text}");
     let (text, _, _) = call(&mut s, "skills", json!({"task": "post on x", "where": "x.com"}));
     assert!(text.starts_with("Skill \"Post on X\" (x.com):\n  1. Click the compose box"), "{text}");
+    let (text, err, _) = call(&mut s, "skills", json!({"where": "x.com"}));
+    assert!(!err && text.starts_with("Skill \"Post on X\""), "no task lists the place's skills: {text}");
     let (_, err, _) = call(&mut s, "save_skill", json!({"name": "Empty", "steps": []}));
     assert!(err);
 }

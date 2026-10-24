@@ -79,7 +79,9 @@ impl Skills {
                     let place = text(s, "where");
                     let here = places.iter().any(|p| p == place);
                     let overlap = about(s).intersection(&want).count();
-                    (overlap > 0 && (here || place == "general" || places.is_empty()))
+                    // No task given: every skill for these places, best first.
+                    let matches = if want.is_empty() { here } else { overlap > 0 && (here || place == "general" || places.is_empty()) };
+                    matches
                         .then(|| (overlap as f64 + if here { 1.0 } else { 0.0 } + 0.1 * value(s, t) / 100.0, as_text(s)))
                 })
                 .collect();

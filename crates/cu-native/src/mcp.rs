@@ -413,9 +413,9 @@ impl<D: Desktop> Server<D> {
                                      "worked": {"type": "boolean", "description": "True once the fix is confirmed."},
                                      "task": {"type": "string"}}), &["what", "fix"])},
             {"name": "skills", "description": "Step-by-step skills for this app or site that worked before. Check before starting a multi-step task.",
-             "inputSchema": s(json!({"task": {"type": "string", "description": "What you're about to do."},
+             "inputSchema": s(json!({"task": {"type": "string", "description": "What you're about to do (leave out to list every skill for the place)."},
                                      "where": {"type": "string", "description": "App name or site; separate several with commas. The frontmost app is always included."},
-                                     "limit": {"type": "integer", "description": "Default 2, max 5."}}), &["task"])},
+                                     "limit": {"type": "integer", "description": "Default 2, max 5."}}), &[])},
             {"name": "save_skill", "description": "Save a reusable, step-by-step way of doing something in an app or site, once it has worked, so later runs (any AI) can follow it.",
              "inputSchema": s(json!({"name": {"type": "string", "description": "Short, e.g. \"Post on X\"."},
                                      "where": {"type": "string", "description": "App name or site, e.g. \"x.com\" (default: the frontmost app)."},
@@ -630,7 +630,7 @@ impl<D: Desktop> Server<D> {
             }
             "skills" => {
                 let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(2) as usize;
-                let found = self.skills.find(req_str(args, "task")?, &self.places(args), limit)?;
+                let found = self.skills.find(arg_str(args, "task").unwrap_or(""), &self.places(args), limit)?;
                 Ok(Reply::text(if found.is_empty() {
                     "No skills match. If you work out a reusable way, call save_skill.".to_string()
                 } else {
