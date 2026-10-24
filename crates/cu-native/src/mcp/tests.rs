@@ -425,3 +425,23 @@ fn every_tool_call_is_logged_with_its_outcome_and_time() {
     assert_eq!(utc(1_792_812_345), "2026-10-24 03:25:45");
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn a_written_role_beats_text_that_quotes_the_label() {
+    let els = vec![
+        el("e0", "AXStaticText", "I typed into TextArea \"Message input\" earlier", 10, 10),
+        el("e1", "AXTextArea", "Message input", 50, 300),
+    ];
+    assert_eq!(best_match("TextArea \"Message input\"", &els).unwrap().0, 1);
+}
+
+#[test]
+fn two_identical_fields_are_reported_not_guessed() {
+    let mut s = server();
+    s.desk.els = vec![el("e0", "AXTextArea", "Message input", 100, 300), el("e1", "AXTextArea", "Message input", 900, 700)];
+    let (text, err, _) = call(&mut s, "click_element", json!({"element": "TextArea \"Message input\""}));
+    assert!(err && text.starts_with("ambiguous: e0 TextArea \"Message input\" at (50,150); e1"), "{text}");
+    assert!(s.desk.log.is_empty());
+    let (_, err, _) = call(&mut s, "click_element", json!({"element": "e1"}));
+    assert!(!err, "an id picks one");
+}

@@ -157,7 +157,13 @@ const ROLE_HINTS: &[(&str, &[&str])] = &[
     ("row", &["AXRow", "AXCell"]),
 ];
 
-/// How well `desc` describes `el`, roughly 0..1.4.
+/// Role names a description can use as written in list_screen_elements ("TextArea", "Button"…).
+const ROLE_NAMES: &[&str] = &[
+    "button", "textarea", "textfield", "searchfield", "combobox", "checkbox", "radiobutton", "popupbutton",
+    "menubutton", "link", "menuitem", "menubaritem", "tab", "slider", "cell", "row", "image", "statictext",
+];
+
+/// How well `desc` describes `el`, roughly 0..2.4.
 pub fn match_score(desc: &str, el: &NativeElement) -> f64 {
     let d = desc.trim().to_lowercase();
     let label = el.label.to_lowercase();
@@ -182,6 +188,12 @@ pub fn match_score(desc: &str, el: &NativeElement) -> f64 {
     }
     if ROLE_HINTS.iter().any(|(h, roles)| dw.iter().any(|w| w == h) && roles.contains(&el.role.as_str())) {
         score += 0.1;
+    }
+    // A role written as list_screen_elements shows it ('TextArea "Message input"') is a requirement:
+    // the right role counts for a lot, and another role (a chat message quoting the words) against.
+    let role = role_name(&el.role).to_lowercase();
+    if let Some(named) = dw.iter().find(|w| ROLE_NAMES.contains(&w.as_str())) {
+        score += if *named == role { 0.5 } else { -0.5 };
     }
     score
 }
@@ -310,6 +322,16 @@ impl<D: Desktop> Server<D> {
         }
         self.refresh(MAX_ELEMENTS);
         match best_match(element, &self.elements) {
+            // Two elements with the same role and label (e.g. two "Message input" boxes): don't guess.
+            Some((i, _, Some(j)))
+                if self.elements[i].role == self.elements[j].role && self.elements[i].label == self.elements[j].label =>
+            {
+                let same: Vec<String> = (0..self.elements.len())
+                    .filter(|&k| self.elements[k].role == self.elements[i].role && self.elements[k].label == self.elements[i].label)
+                    .map(|k| self.describe(k))
+                    .collect();
+                Err(format!("ambiguous: {} — pass one of these ids", same.join("; ")))
+            }
             Some((i, score, close)) => {
                 let mut how = format!("matched {score:.2}");
                 if let Some(j) = close {
