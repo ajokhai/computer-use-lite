@@ -44,6 +44,27 @@ TASKS = {
              "in a new folder named \"CU Bench {stamp}\" on the Desktop. "
              "6. Quit Calculator, TextEdit, Reminders and Calendar, and leave that folder open in Finder."),
 }
+# Tasks that run right after another, in the same stamp, once it has been checked.
+FOLLOW_UPS = {
+    "desk": ("Clean up after a test, carefully: delete only these and nothing else. "
+             "1. In Notes, delete the note titled \"CU Bench {stamp}\". "
+             "2. In Reminders, delete \"Buy groceries {stamp}\". "
+             "3. In Calendar, delete the event \"CU review {stamp}\" tomorrow. "
+             "4. Move the folder \"CU Bench {stamp}\" on the Desktop to the Trash. "
+             "Then quit Notes, Reminders and Calendar."),
+}
+# How a task is checked: a script given the stamp (and --cleaned for a follow-up), exit 0 = all passed.
+CHECKERS = {"desk": "scripts/check_desk.py"}
+
+
+def check(name: str, stamp: str, *flags: str) -> dict:
+    p = subprocess.run([sys.executable, CHECKERS[name], stamp, *flags], cwd=PROJECT, capture_output=True, text=True)
+    print("\n".join(ln for ln in p.stdout.splitlines() if ln.startswith("  ")), flush=True)
+    last = (p.stdout.strip().splitlines() or ["{}"])[-1]
+    try:
+        return json.loads(last)
+    except ValueError:
+        return {"error": (p.stderr or p.stdout)[-300:]}
 
 
 def run(model: str, task: str, timeout: int) -> dict:
@@ -81,9 +102,18 @@ def main():
         task = TASKS[a.task].format(label=LABELS[m], stamp=stamp)
         print(f"▶ {m} [stamp {stamp}]: {task}", flush=True)
         r = run(m, task, a.timeout) | {"stamp": stamp}
+        print(f"  {r['seconds']}s, {r['actions']} actions, exit {r['exit']}: {r['result']}", flush=True)
+        if a.task in CHECKERS:
+            r["check"] = check(a.task, stamp)
+        if a.task in FOLLOW_UPS:
+            follow = FOLLOW_UPS[a.task].format(label=LABELS[m], stamp=stamp)
+            print(f"▶ {m} cleans up: {follow}", flush=True)
+            c = run(m, follow, a.timeout)
+            print(f"  {c['seconds']}s, {c['actions']} actions, exit {c['exit']}: {c['result']}", flush=True)
+            r["cleanup"] = {k: c[k] for k in ("seconds", "actions", "exit", "result", "void")} | {
+                "check": check(a.task, stamp, "--cleaned")}
         with open(a.out, "a") as f:
             f.write(json.dumps(r) + "\n")
-        print(f"  {r['seconds']}s, {r['actions']} actions, exit {r['exit']}: {r['result']}", flush=True)
         time.sleep(3)  # let the screen settle between runs
 
 
