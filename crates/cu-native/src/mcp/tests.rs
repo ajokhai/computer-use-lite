@@ -20,6 +20,8 @@ struct Fake {
     /// Elements to switch to after this many `elements()` calls (for wait_for_change).
     later: Option<(usize, Vec<NativeElement>)>,
     walks: usize,
+    /// Where the captured display sits in global points (a second display can be negative).
+    shot_origin: (f64, f64),
 }
 
 fn el(id: &str, role: &str, label: &str, x: i32, y: i32) -> NativeElement {
@@ -47,7 +49,7 @@ impl Desktop for Fake {
         (2560.0, 1600.0) // wider than the default screenshot: scale 2
     }
     fn on_screen(&self, x: f64, y: f64) -> bool {
-        (0.0..2560.0).contains(&x) && (0.0..1600.0).contains(&y)
+        (-2560.0..2560.0).contains(&x) && (-1600.0..1600.0).contains(&y)
     }
     fn elements(&mut self, limit: usize) -> (String, Vec<NativeElement>) {
         self.walks += 1;
@@ -63,7 +65,7 @@ impl Desktop for Fake {
     }
     fn screenshot(&mut self, max_width: u32) -> Result<Shot, String> {
         let w = max_width.min(2560);
-        Ok(Shot { png: vec![0x89, b'P', b'N', b'G'], width: w, height: w * 10 / 16, scale: 2560.0 / w as f64 })
+        Ok(Shot { png: vec![0x89, b'P', b'N', b'G'], width: w, height: w * 10 / 16, scale: 2560.0 / w as f64, ox: self.shot_origin.0, oy: self.shot_origin.1 })
     }
     fn click(&mut self, x: f64, y: f64, button: Button, clicks: usize) {
         self.log.push(format!("click {x},{y} {button:?} x{clicks}"));
@@ -290,7 +292,7 @@ fn emergency_stop_blocks_every_acting_tool() {
 #[test]
 fn off_screen_points_are_refused() {
     let mut s = server();
-    let (text, err, _) = call(&mut s, "click_at", json!({"x": 5000, "y": 10}));
+    let (text, err, _) = call(&mut s, "click_at", json!({"x": 9000, "y": 10}));
     assert!(err && text.contains("off every screen"));
     assert!(s.desk.log.is_empty());
 }
@@ -358,4 +360,22 @@ fn missing_arguments_are_tool_errors_not_crashes() {
         let (text, err, _) = call(&mut s, name, json!({}));
         assert!(err, "{name}: {text}");
     }
+}
+
+#[test]
+fn screenshots_of_another_display_map_through_its_origin() {
+    let mut s = server();
+    s.desk.shot_origin = (-2560.0, -200.0);
+    call(&mut s, "take_screenshot", json!({"max_width": 1280}));
+    call(&mut s, "click_at", json!({"x": 100, "y": 50}));
+    assert_eq!(s.desk.log.last().unwrap(), "click -2360,-100 Left x1");
+    let (text, _, _) = call(&mut s, "list_screen_elements", json!({}));
+    assert!(text.contains("e0 Button \"Send\" at (1330,125)"), "{text}");
+}
+
+#[test]
+fn an_exact_name_beats_nearby_text() {
+    let els = vec![el("e10", "AXButton", "Next", 10, 10), el("e12", "AXButton", "Post", 50, 10)];
+    assert_eq!(best_match("Button \"Post\" (near Next)", &els).unwrap().0, 1);
+    assert_eq!(best_match("post", &els).unwrap().0, 1);
 }

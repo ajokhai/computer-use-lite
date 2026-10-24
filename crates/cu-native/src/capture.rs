@@ -101,6 +101,9 @@ pub struct Shot {
     pub height: u32,
     /// Screen points per image pixel: multiply image coordinates by this to get points.
     pub scale: f64,
+    /// The captured display's top-left corner in global points (other displays can be negative).
+    pub ox: f64,
+    pub oy: f64,
 }
 
 /// Downscale with high-quality interpolation; the caller releases the result.
@@ -121,8 +124,12 @@ unsafe fn scaled(image: CGImageRef, w: usize, h: usize) -> CGImageRef {
 /// Capture the main display at point resolution, no wider than `max_width` pixels.
 /// None without Screen Recording permission or if capture fails.
 pub fn capture_main(max_width: u32) -> Option<Shot> {
+    capture_display(unsafe { CGDisplayBounds(CGMainDisplayID()) }, max_width)
+}
+
+/// Capture one display (its bounds in global points) at point resolution, no wider than `max_width`.
+pub fn capture_display(bounds: CGRect, max_width: u32) -> Option<Shot> {
     unsafe {
-        let bounds = CGDisplayBounds(CGMainDisplayID());
         let mut image = CGWindowListCreateImage(
             bounds,
             K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
@@ -153,6 +160,6 @@ pub fn capture_main(max_width: u32) -> Option<Shot> {
         }
         let png = std::slice::from_raw_parts(CFDataGetBytePtr(data), CFDataGetLength(data) as usize).to_vec();
         CFRelease(data);
-        Some(Shot { png, width: w as u32, height: h as u32, scale: bounds.size.width / w as f64 })
+        Some(Shot { png, width: w as u32, height: h as u32, scale: bounds.size.width / w as f64, ox: bounds.origin.x, oy: bounds.origin.y })
     }
 }

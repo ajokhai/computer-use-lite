@@ -189,6 +189,12 @@ const WALK_TIMEOUT_MS: u128 = 2500;
 /// Chrome around the content: walked after everything else, so a browser's tabs, bookmarks and
 /// toolbar can't use up the element budget before the page itself is reached.
 const DEFERRED: &[&str] = &["AXToolbar", "AXTabGroup", "AXMenuBar"];
+/// Web page regions around the main content (ARIA landmarks), walked after it for the same reason:
+/// on a site like X the navigation and sidebar would otherwise fill the budget before the timeline.
+const DEFERRED_SUBROLES: &[&str] = &["AXLandmarkNavigation", "AXLandmarkComplementary", "AXLandmarkBanner", "AXLandmarkContentInfo"];
+/// Chromium browsers build their page accessibility only for assistive apps that ask
+/// (AXEnhancedUserInterface); Electron apps answer AXManualAccessibility instead.
+const CHROMIUM: &[&str] = &["Google Chrome", "Chromium", "Microsoft Edge", "Brave Browser", "Arc", "Vivaldi", "Opera", "Dia", "Comet"];
 const LABEL_ATTRS: [&str; 5] = ["AXTitle", "AXDescription", "AXValue", "AXPlaceholderValue", "AXHelp"];
 
 /// Labels for the window buttons, which have no title (their help text is no use as a label).
@@ -203,8 +209,8 @@ fn window_button_label(subrole: &str) -> Option<&'static str> {
 }
 
 /// Electron and Chromium apps (VS Code, Slack, Discord, Chrome...) only build their accessibility
-/// tree once a client asks for it. Ask once per process; other apps just ignore the attribute.
-fn enable_app_accessibility(pid: i32, root: &CfRef) {
+/// tree once a client asks for it. Ask once per process; other apps just ignore the attributes.
+fn enable_app_accessibility(pid: i32, app: &str, root: &CfRef) {
     use std::sync::Mutex;
     static ASKED: Mutex<Vec<i32>> = Mutex::new(Vec::new());
     let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
@@ -217,6 +223,10 @@ fn enable_app_accessibility(pid: i32, root: &CfRef) {
     asked.push(pid);
     unsafe {
         AXUIElementSetAttributeValue(root.ptr(), cf_string("AXManualAccessibility").ptr(), kCFBooleanTrue);
+        // Only for browsers: some other apps animate or reposition windows differently with it on.
+        if CHROMIUM.contains(&app) {
+            AXUIElementSetAttributeValue(root.ptr(), cf_string("AXEnhancedUserInterface").ptr(), kCFBooleanTrue);
+        }
     }
 }
 
@@ -252,8 +262,18 @@ fn geometry(el: &CfRef, k_pos: &CfRef, k_size: &CfRef) -> Option<(CGPoint, CGSiz
 }
 
 /// Walk the frontmost app's windows, then its menu bar, and list on-screen actionable
-/// elements (at most `max_elements`, within 2.5 s).
+/// elements (at most `max_elements`, within 2.5 s). A Chromium browser that shows no page yet
+/// has just been asked to build it, so look once more after a moment.
 pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
+    let (snap, saw_page) = walk_once(max_elements, keep_refs);
+    if saw_page || !CHROMIUM.contains(&snap.result.app.as_str()) || snap.result.elements.len() >= max_elements {
+        return snap;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    walk_once(max_elements, keep_refs).0
+}
+
+fn walk_once(max_elements: usize, keep_refs: bool) -> (Snapshot, bool) {
     let t0 = Instant::now();
     let (pid, app) = get_frontmost_app();
     let empty = |app: String| Snapshot {
@@ -261,10 +281,11 @@ pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
         refs: Vec::new(),
     };
     if pid <= 0 {
-        return empty(app);
+        return (empty(app), false);
     }
-    let Some(root) = CfRef::owned(unsafe { AXUIElementCreateApplication(pid) }) else { return empty(app) };
-    enable_app_accessibility(pid, &root);
+    let Some(root) = CfRef::owned(unsafe { AXUIElementCreateApplication(pid) }) else { return (empty(app), false) };
+    enable_app_accessibility(pid, &app, &root);
+    let mut saw_page = false;
     let k_subrole = cf_string("AXSubrole");
 
     let k_children = cf_string("AXChildren");
@@ -312,7 +333,12 @@ pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
             continue; // `el` drops here; draining the stacks releases everything else
         }
         let role = copy_attr(&el, &k_role).map(|r| string_of(r.ptr())).unwrap_or_default();
-        if !deferred && DEFERRED.contains(&role.as_str()) {
+        saw_page |= role == "AXWebArea";
+        let landmark = || {
+            role == "AXGroup"
+                && copy_attr(&el, &k_subrole).is_some_and(|r| DEFERRED_SUBROLES.contains(&string_of(r.ptr()).as_str()))
+        };
+        if !deferred && (DEFERRED.contains(&role.as_str()) || landmark()) {
             later.push((el, depth, true));
             continue;
         }
@@ -358,10 +384,11 @@ pub fn walk(max_elements: usize, keep_refs: bool) -> Snapshot {
         stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1, deferred)));
     }
 
-    Snapshot {
+    let snap = Snapshot {
         result: AxTreeResult { app, duration_ms: t0.elapsed().as_secs_f64() * 1000.0, elements },
         refs,
-    }
+    };
+    (snap, saw_page)
 }
 
 /// Full text of an element: its value, else its title or description (capped at 20k chars).
@@ -418,6 +445,21 @@ pub fn select_menu(path: &[&str]) -> Result<String, String> {
         current = items.swap_remove(pos);
     }
     unreachable!()
+}
+
+/// The display showing the frontmost app's front window (the main display if none is found).
+pub fn active_display() -> CGRect {
+    let displays = display_bounds();
+    let main = displays.first().copied().unwrap_or_default();
+    let (pid, _) = get_frontmost_app();
+    windows()
+        .into_iter()
+        .find(|w| w.pid == pid as i64)
+        .and_then(|w| {
+            let (cx, cy) = (w.x as f64 + w.w as f64 / 2.0, w.y as f64 + w.h as f64 / 2.0);
+            displays.iter().copied().find(|r| on_screen(cx, cy, std::slice::from_ref(r)))
+        })
+        .unwrap_or(main)
 }
 
 /// One on-screen window from the window server.

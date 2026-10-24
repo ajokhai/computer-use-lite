@@ -226,8 +226,9 @@ class Agent:
                 misses = 0
                 continue
             if op in ("CLICK", "DOUBLE_CLICK", "TYPE") and el is None and not (op == "TYPE" and _focused(els)):
-                # If element wasn't found in AX tree, leverage Jev Box vision primitive on screenshot
-                target_desc = d.get("text") or task
+                # Not in the accessibility tree: ask Jev's vision to find it on a screenshot. For typing,
+                # look for the text box, not the words to be typed.
+                target_desc = (f'text box to type "{d["text"][:40]}" into' if op == "TYPE" else d.get("text") or task)
                 pt, conf = self.jev.locate(target_desc) if self.jev else (None, 0.0)
                 if pt and conf >= 0.2:
                     cx, cy, cw, ch = pt
@@ -265,14 +266,12 @@ class Agent:
             els = []
         if op in ("CLICK", "DOUBLE_CLICK"):
             actions.click(el.x, el.y, clicks=2 if op == "DOUBLE_CLICK" else 1)
-        elif op == "TYPE":
-            if el is not None and not el.focused:
-                actions.click(el.x, el.y)
-            actions.type_text(d["text"], clear=el is not None and el.role != "AXTextArea")
-        elif op == "PASTE":
-            if el is not None and not el.focused:
-                actions.click(el.x, el.y)
-            actions.paste()
+        elif op in ("TYPE", "PASTE"):
+            self._focus_text_field(el)
+            if op == "TYPE":
+                actions.type_text(d["text"], clear=el is not None and el.role in ("AXTextField", "AXSearchField"))
+            else:
+                actions.paste()
         elif op == "COPY":
             actions.copy_selection()
         elif op == "SELECT_ALL":
@@ -314,6 +313,18 @@ class Agent:
                     raise RuntimeError(f"could not open {d['app']}")
         elif op == "WAIT":
             time.sleep(0.5)
+
+    def _focus_text_field(self, el: Element | None):
+        """Make sure a text field has focus before typing or pasting. Typing anywhere else can
+        trigger single-key shortcuts (on X, "l" likes and "t" reposts), so with no text field
+        nothing is typed and the step fails, letting the model choose again."""
+        if el is not None and el.role not in TEXT_INPUT and el.role != "AXVisual":
+            raise RuntimeError(f"{el.describe()} isn't a text field")
+        if el is not None and not el.focused:
+            actions.click(el.x, el.y)
+            time.sleep(0.15)
+        if not _focused(ax_elements(limit=253)[1]):
+            raise RuntimeError("no text field has focus, so nothing was typed")
 
     def step(self, s: dict) -> tuple[bool, str]:
         kind = s.get("kind")
@@ -410,8 +421,11 @@ def _fmt(s: dict) -> str:
     return f"{k} {detail}".strip() + (f" — {s['do']}" if s.get("do") else "")
 
 
+TEXT_INPUT = ("AXTextField", "AXTextArea", "AXSearchField", "AXComboBox")
+
+
 def _focused(els: list[Element]) -> bool:
-    return any(e.focused and e.role in ("AXTextField", "AXTextArea", "AXSearchField", "AXComboBox") for e in els)
+    return any(e.focused and e.role in TEXT_INPUT for e in els)
 
 
 def _describe_op(d: dict) -> str:

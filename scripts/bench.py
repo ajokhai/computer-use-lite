@@ -30,15 +30,17 @@ LABELS = {"jev": "Jev", "gemini": "Gemini", "claude": "Claude", "claude-sonnet":
 
 TASKS = {
     "tweet": ("In Google Chrome, switch to the profile named \"familymake\", go to x.com, and post a tweet "
-              "that says exactly: \"This is {label} testing computer use with my account. "
-              "https://github.com/ajokhai/computer-use-lite\""),
+              "saying that you, {label}, are testing computer use with this account, and include the link "
+              "https://github.com/ajokhai/computer-use-lite. The wording is up to you; for example: "
+              "\"This is {label} testing computer use with my account. https://github.com/ajokhai/computer-use-lite\""),
 }
 
 
 def run(model: str, task: str, timeout: int) -> dict:
     mode, override = MODELS[model]
     cmd = [sys.executable, "-m", "cu", "--mode", mode, "--yolo", "--", task]
-    env = {**__import__("os").environ, "CU_SETTINGS": json.dumps(override)}
+    # No switching: a run is about one model, so another one stepping in would make the result a lie.
+    env = {**__import__("os").environ, "CU_SETTINGS": json.dumps({"auto_switch": False, **override})}
     t0 = time.monotonic()
     try:
         p = subprocess.run(cmd, cwd=PROJECT, env=env, capture_output=True, text=True, timeout=timeout)
@@ -47,9 +49,13 @@ def run(model: str, task: str, timeout: int) -> dict:
         out, code = f"{e.stdout or ''}{e.stderr or ''}\nTIMED OUT after {timeout}s", -1
     seconds = round(time.monotonic() - t0, 1)
     lines = [ln for ln in out.splitlines() if ln.strip()]
+    switched = [ln for ln in lines if "switching to" in ln or "carries on alone" in ln]
+    if switched:  # belt and braces: the result is void if another model acted
+        code = code or 2
     return {"model": model, "mode": mode, "task": task, "seconds": seconds, "exit": code,
             "result": next((ln for ln in lines if ln.startswith(("done", "stopped", "blocked"))), lines[-1] if lines else ""),
             "actions": sum(1 for ln in lines if "→" in ln), "log_tail": lines[-40:],
+            "void": bool(switched),
             "at": time.strftime("%Y-%m-%d %H:%M:%S")}
 
 

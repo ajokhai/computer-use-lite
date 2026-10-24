@@ -84,7 +84,7 @@ impl Desktop for MacDesktop {
     }
 
     fn screenshot(&mut self, max_width: u32) -> Result<Shot, String> {
-        capture::capture_main(max_width).ok_or_else(|| {
+        capture::capture_display(ax::active_display(), max_width).ok_or_else(|| {
             "screen capture failed: grant Screen Recording to the app that started this server \
              (System Settings › Privacy & Security › Screen Recording)"
                 .to_string()

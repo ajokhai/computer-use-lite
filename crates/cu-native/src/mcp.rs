@@ -14,7 +14,7 @@ use crate::NativeElement;
 pub const SERVER_NAME: &str = "computer-use-lite";
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_SHOT_WIDTH: u32 = 1280;
-const MAX_ELEMENTS: usize = 254;
+const MAX_ELEMENTS: usize = 600; // MCP clients can take more than Jev's 255 choices
 const MAX_LINE: usize = 4 * 1024 * 1024; // a request bigger than this is dropped, not buffered
 const MAX_TEXT: usize = 20_000;
 
@@ -38,6 +38,9 @@ pub struct Server<D: Desktop> {
     contexts: Vec<String>,
     /// Screen points per screenshot pixel; set from the default width until a screenshot is taken.
     scale: f64,
+    /// Global position of the latest screenshot's display (the main display until one is taken).
+    ox: f64,
+    oy: f64,
 }
 
 /// A tool's outcome: content blocks, and whether it failed.
@@ -136,6 +139,12 @@ pub fn match_score(desc: &str, el: &NativeElement) -> f64 {
     if label.chars().count() >= 2 && (d.contains(&label) || (!core.is_empty() && label.contains(&core))) {
         score += 0.3;
     }
+    // An exact name beats any partial or nearby-text match: a quoted name ('Button "Post"'),
+    // or the whole description (minus role words) being the label.
+    let quoted = d.split(['"', '\u{201c}', '\u{201d}']).nth(1).map(str::trim).filter(|q| !q.is_empty());
+    if !label.is_empty() && (quoted == Some(label.as_str()) || label == core || label == d) {
+        score += 1.0;
+    }
     if ROLE_HINTS.iter().any(|(h, roles)| dw.iter().any(|w| w == h) && roles.contains(&el.role.as_str())) {
         score += 0.1;
     }
@@ -176,21 +185,26 @@ impl<D: Desktop> Server<D> {
     pub fn new(desk: D) -> Self {
         let (w, _) = desk.main_display();
         let scale = if w > DEFAULT_SHOT_WIDTH as f64 { w / DEFAULT_SHOT_WIDTH as f64 } else { 1.0 };
-        Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale }
+        Server { desk, app: String::new(), elements: Vec::new(), contexts: Vec::new(), scale, ox: 0.0, oy: 0.0 }
     }
 
     pub fn desktop(&self) -> &D {
         &self.desk
     }
 
-    /// Screenshot pixels -> screen points.
+    /// Screenshot pixels -> global screen points.
     fn to_points(&self, x: f64, y: f64) -> (f64, f64) {
-        (x * self.scale, y * self.scale)
+        (self.ox + x * self.scale, self.oy + y * self.scale)
     }
 
-    /// Screen points -> screenshot pixels, for output.
+    /// Global screen points -> screenshot pixels, for output.
     fn to_px(&self, x: i32, y: i32) -> (i64, i64) {
-        ((x as f64 / self.scale).round() as i64, (y as f64 / self.scale).round() as i64)
+        (((x as f64 - self.ox) / self.scale).round() as i64, ((y as f64 - self.oy) / self.scale).round() as i64)
+    }
+
+    /// A width or height in points -> screenshot pixels.
+    fn to_px_len(&self, v: i32) -> i64 {
+        (v as f64 / self.scale).round() as i64
     }
 
     fn describe(&self, i: usize) -> String {
@@ -239,10 +253,10 @@ impl<D: Desktop> Server<D> {
         let element = json!({"type": "string", "description": "An id from list_screen_elements (e.g. \"e12\") or a description (e.g. \"Send button\")."});
         let xy = |what: &str| json!({"type": "number", "description": format!("{what}, in pixels of the latest screenshot")});
         json!([
-            {"name": "take_screenshot", "description": "Screenshot of the main display. Every x/y in these tools is a pixel of the latest screenshot.",
+            {"name": "take_screenshot", "description": "Screenshot of the display showing the frontmost app's window (it follows the app across displays). Every x/y in these tools is a pixel of the latest screenshot.",
              "inputSchema": s(json!({"max_width": {"type": "integer", "description": "Widest image to return, default 1280 (smaller is cheaper)."}}), &[])},
             {"name": "list_screen_elements", "description": "The frontmost app's buttons, fields, links, menus and text, from the accessibility tree, as lines of: id role \"label\" at (x,y).",
-             "inputSchema": s(json!({"limit": {"type": "integer", "description": "At most this many elements (default 200, max 254)."}}), &[])},
+             "inputSchema": s(json!({"limit": {"type": "integer", "description": "At most this many elements (default 300, max 600)."}}), &[])},
             {"name": "click_element", "description": "Click an element by id or description.",
              "inputSchema": s(json!({"element": element, "double": {"type": "boolean"}, "button": {"type": "string", "enum": ["left", "right", "middle"]}}), &["element"])},
             {"name": "click_at", "description": "Click at screenshot pixel coordinates. Use when an app has no useful elements.",
@@ -288,18 +302,18 @@ impl<D: Desktop> Server<D> {
             "take_screenshot" => {
                 let w = args.get("max_width").and_then(Value::as_u64).unwrap_or(DEFAULT_SHOT_WIDTH as u64).clamp(320, 2560) as u32;
                 let shot = self.desk.screenshot(w)?;
-                self.scale = shot.scale;
+                (self.scale, self.ox, self.oy) = (shot.scale, shot.ox, shot.oy);
                 let data = base64::engine::general_purpose::STANDARD.encode(&shot.png);
                 Ok(Reply {
                     content: vec![
                         json!({"type": "image", "data": data, "mimeType": "image/png"}),
-                        json!({"type": "text", "text": format!("{}x{} screenshot of the main display; frontmost app: {}", shot.width, shot.height, self.desk.frontmost())}),
+                        json!({"type": "text", "text": format!("{}x{} screenshot of the display showing {}", shot.width, shot.height, self.desk.frontmost())}),
                     ],
                     is_error: false,
                 })
             }
             "list_screen_elements" => {
-                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(300) as usize;
                 self.refresh(limit);
                 let mut out = format!("frontmost app: {} ({} elements)\n", self.app, self.elements.len());
                 for i in 0..self.elements.len() {
@@ -430,7 +444,7 @@ impl<D: Desktop> Server<D> {
                 let mut out = format!("{} windows, front to back\n", wins.len());
                 for w in wins {
                     let (x, y) = self.to_px(w.x, w.y);
-                    let (ww, wh) = self.to_px(w.w, w.h);
+                    let (ww, wh) = (self.to_px_len(w.w), self.to_px_len(w.h));
                     let title = if w.title.is_empty() { String::new() } else { format!(" \"{}\"", truncate_chars(&w.title, 80)) };
                     out.push_str(&format!("{}{title} at ({x},{y}) size {ww}x{wh}\n", w.app));
                 }

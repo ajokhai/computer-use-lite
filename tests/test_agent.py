@@ -39,7 +39,11 @@ def desk(monkeypatch):
     monkeypatch.setattr(agent, "ax_elements", lambda limit=200: ("Notes", [BUTTON, FIELD]))
     monkeypatch.setattr(agent, "installed_apps", lambda: ["Notes"])
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
-    monkeypatch.setattr(actions, "click", lambda x, y, clicks=1, **k: done.append(f"click {x},{y}"))
+    def click(x, y, clicks=1, **k):
+        done.append(f"click {x},{y}")
+        FIELD.focused = (x, y) == (FIELD.x, FIELD.y)  # clicking a field focuses it, as on screen
+    monkeypatch.setattr(actions, "click", click)
+    monkeypatch.setattr(FIELD, "focused", False)
     monkeypatch.setattr(actions, "type_text", lambda text, **k: done.append(f"type {text}"))
     monkeypatch.setattr(actions, "hotkey", lambda keys: done.append("+".join(keys)))
     return done
@@ -90,3 +94,11 @@ def test_corner_abort_stops_the_whole_task(desk, monkeypatch):
 def test_confirmations_decline_without_a_terminal(monkeypatch, capsys):
     monkeypatch.setattr(agent.sys, "stdin", None)
     assert agent.ask_user("Send it?") is False
+
+
+def test_typing_needs_a_focused_text_field(desk, monkeypatch):
+    # Nothing focusable is a text field: typing would hit page shortcuts (X: "l" likes), so it must not happen.
+    heading = Element(id="e2", role="AXStaticText", label="What's happening", x=10, y=90, w=80, h=20)
+    monkeypatch.setattr(agent, "ax_elements", lambda limit=200: ("Chrome", [BUTTON, heading]))
+    a, out = run([("TYPE", heading, "hello"), ("TYPE", None, "hello"), ("TYPE", None, "hello")], done_p=0.1)
+    assert not any(x.startswith("type") for x in desk), desk
