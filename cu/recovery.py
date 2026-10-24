@@ -32,8 +32,9 @@ element, scrolling, waiting for a page to load, closing a dialog that's in the w
 # For Jev alone (it can't write text): known failure patterns → what to do differently.
 RULES = [
     (r"no matching element|stuck at 'CLICK'|went blind|no elements",
-     "The element wasn't in the accessibility list. Go to the page for the action directly (a compose or "
-     "new-item URL), wait for it to load, or use the keyboard (Tab, a shortcut) instead of clicking."),
+     "The element wasn't in the accessibility list. In a browser, go to the page for the action directly (a "
+     "compose or new-item URL) and wait for it to load. In an app, use its keyboard shortcut or menu (File, Edit) "
+     "for the action, or Tab to the field, instead of clicking."),
     (r"isn't a text field|no text field has focus",
      "Click the text box itself (its label is usually like 'Post text', 'Message', 'Search') before typing."),
     (r"premature|not done yet",
