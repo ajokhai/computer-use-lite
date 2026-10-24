@@ -1,5 +1,6 @@
 """Menu bar app: a status icon with tick-able options. No windows except small prompts."""
 
+import os
 import queue
 from collections import deque
 import subprocess
@@ -9,6 +10,7 @@ import time
 import rumps
 from AppKit import (
     NSApplication,
+    NSColor,
     NSEvent,
     NSEventMaskFlagsChanged,
     NSEventMaskKeyDown,
@@ -17,13 +19,23 @@ from AppKit import (
 )
 
 from . import __version__, integration, onboarding, replies, say, updater, usage, voicepack
-from .config import LOG, load_keys, load_settings, save_settings
+from .config import DATA, LOG, load_keys, load_settings, save_settings
 from .shortcut import PRESETS, Detector, Shortcut
 from .logger import CRASH_LOG, rotate, setup_logging
 
 setup_logging()
 
-IDLE_ICON, BUSY_ICON, WARN_ICON = "cursorarrow.rays", "cursorarrow.click.2", "cursorarrow.rays"
+# The menu bar icon shows what's happening: idle, working (orange and pulsing: this app's agent, or another
+# AI driving the Mac through cu-mcp) or listening (red). cu-mcp logs every call, so a fresh mcp.log means busy.
+ICONS = {"idle": ("cursorarrow.rays", None, "Idle"),
+         "working": ("cursorarrow.click.2", "systemOrangeColor", "An agent is using your Mac"),
+         "listening": ("mic.fill", "systemRedColor", "Listening")}
+MCP_LOG = LOG.parent / "mcp.log"
+MCP_BUSY_SECS = 6
+
+# Pressing Escape three times stops any agent from anywhere. Escapes an agent types itself don't count.
+ESCAPE, ESCAPES_TO_STOP, ESCAPE_WINDOW = 53, 3, 1.5
+STOP_REQUEST = DATA / "stop-request"  # its time tells cu-mcp to refuse actions for a moment
 
 
 class MenuBar(rumps.App):
@@ -44,7 +56,7 @@ class MenuBar(rumps.App):
         self.status = rumps.MenuItem("Idle")
         self.last = rumps.MenuItem("")
         self.last._menuitem.setHidden_(True)  # shown once a task has finished
-        self.stop_item = rumps.MenuItem("Stop", callback=None, key=".")
+        self.stop_item = rumps.MenuItem("Stop  (Esc Esc Esc)", callback=None, key=".")
         self.ask = rumps.MenuItem("Ask Computer Use…", callback=lambda _: self.open_bar())
         self.setup_item = rumps.MenuItem("Finish Setting Up…", callback=lambda _: self.show_setup())
 
@@ -136,20 +148,52 @@ class MenuBar(rumps.App):
     def _first_paint(self, timer):
         timer.stop()
         NSApplication.sharedApplication().setActivationPolicy_(1)  # menu bar only, no Dock icon
-        self.set_icon(IDLE_ICON)
+        self._icon = None  # pump() paints it
         self._install_hotkey()
         if not self.settings.get("onboarded") or onboarding.missing_required():
             self.show_setup()
         if self.settings["hands_free"]:
             self.ensure_voice(self._listen)
 
-    def set_icon(self, symbol: str):
-        img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, "Computer Use")
+    def set_icon(self, state: str):
+        symbol, color, tip = ICONS[state]
+        img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, f"Computer Use: {tip}")
         item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
         if img is not None and item is not None:
             img.setTemplate_(True)
-            item.button().setImage_(img)
-            item.button().setTitle_("")
+            button = item.button()
+            button.setImage_(img)
+            button.setTitle_("")
+            button.setContentTintColor_(getattr(NSColor, color)() if color else None)
+            button.setToolTip_(f"Computer Use: {tip}")
+            button.setAlphaValue_(1.0)
+
+    def icon_state(self) -> str:
+        if self.agent is not None or self._mcp_busy():
+            return "working"
+        if self.bar_listening() or (self.direct and self.listener is not None and self.listener.listening):
+            return "listening"
+        return "idle"
+
+    def _mcp_busy(self) -> bool:
+        now = time.monotonic()
+        if now - getattr(self, "_mcp_checked", 0.0) > 0.5:  # one stat every half second
+            self._mcp_checked = now
+            try:
+                self._mcp_recent = time.time() - MCP_LOG.stat().st_mtime < MCP_BUSY_SECS
+            except OSError:
+                self._mcp_recent = False
+        return self._mcp_recent
+
+    def _icon_tick(self):
+        state = self.icon_state()
+        if state != getattr(self, "_icon", None):
+            self._icon = state
+            self.set_icon(state)
+        if state == "working":  # a slow pulse, so it reads as activity even in a glance
+            item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
+            if item is not None:
+                item.button().setAlphaValue_(1.0 if int(time.monotonic() * 1.5) % 2 == 0 else 0.45)
 
     def refresh(self):
         for mode, item in self.modes.items():
@@ -210,8 +254,6 @@ class MenuBar(rumps.App):
         self.usage_menu.add(rumps.separator)
         self.usage_menu.add(rumps.MenuItem("Add a Model…", callback=self.edit_keys))
         self.usage_menu.add(rumps.MenuItem("Clear Out-of-Quota Flags", callback=self.clear_flags))
-        if self.agent is None:
-            self.set_icon(IDLE_ICON)
 
     def open_dashboard(self, provider: str):
         import webbrowser
@@ -238,7 +280,6 @@ class MenuBar(rumps.App):
                 self.ensure_voice(self._listen)
             elif self.listener and not self.direct:
                 self.listener.stop()
-                self.set_icon(IDLE_ICON)
 
     def toggle_login(self, _):
         integration.set_login(not integration.login_enabled())
@@ -610,6 +651,8 @@ class MenuBar(rumps.App):
                                "Another app uses that shortcut. Pick another in Settings › Shortcut.")
 
         def on_key(event):
+            if event.keyCode() == ESCAPE:
+                self.on_escape(event)
             detector.key_down(event.keyCode(), event.modifierFlags(), time.monotonic())
 
         def on_flags(event):
@@ -627,6 +670,27 @@ class MenuBar(rumps.App):
             NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, on_flags),
             NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, local(on_flags)),
         ]
+
+    def on_escape(self, event):
+        if _typed_by_an_agent(event):
+            return
+        now = time.monotonic()
+        self._escapes = [t for t in getattr(self, "_escapes", []) if now - t < ESCAPE_WINDOW] + [now]
+        if len(self._escapes) >= ESCAPES_TO_STOP:
+            self._escapes = []
+            self.stop_everything()
+
+    def stop_everything(self):
+        """Stop this app's agent and tell cu-mcp to stop acting for whichever AI is driving it."""
+        try:
+            STOP_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+            STOP_REQUEST.write_text(str(time.time()))
+        except OSError:
+            pass
+        if self.agent:
+            self.stop(None)
+        self.say("Okay, I stopped.")
+        self.status.title = "Stopped (Escape pressed 3 times)"
 
     def ensure_voice(self, then):
         """Create the listener for the chosen engine (asking Apple's permission if needed), then continue."""
@@ -950,7 +1014,6 @@ class MenuBar(rumps.App):
             rumps.alert("Computer Use", str(e))
             return
         self.status.title = f"Working: {_short(task)}"
-        self.set_icon(BUSY_ICON)
         self.refresh()
         self.last_task, self.last_log = task, deque(maxlen=80)
         self.log(f"\n▶ {task}  [{self.agent.mode}]")
@@ -994,6 +1057,7 @@ class MenuBar(rumps.App):
         if detector is not None:
             self.on_gesture(detector.tick(time.monotonic()))
         self._voice_tick()
+        self._icon_tick()
         while not self.events.empty():
             kind, payload = self.events.get()
             if kind == "update":
@@ -1062,7 +1126,6 @@ class MenuBar(rumps.App):
                 if not self.settings["hands_free"]:
                     self._drop_listener()
                 self.status.title = "Idle"
-                self.set_icon(IDLE_ICON)
                 self.last.title = f"Last: {_short(payload, 50)}"
                 self.last._menuitem.setHidden_(False)
                 self.refresh()
@@ -1099,6 +1162,22 @@ def _choose_zip():
         from pathlib import Path
         return Path(str(panel.URLs()[0].path()))
     return None
+
+
+def _typed_by_an_agent(event) -> bool:
+    """Whether a key event was posted by this app or by cu-mcp rather than typed by a person."""
+    import os
+    import Quartz
+    try:
+        pid = Quartz.CGEventGetIntegerValueField(event.CGEvent(), Quartz.kCGEventSourceUnixProcessID)
+    except Exception:
+        return False
+    if pid == os.getpid():
+        return True
+    if pid <= 0:
+        return False
+    name = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout.strip()
+    return name.endswith("cu-mcp")
 
 
 def _short(s: str, n: int = 40) -> str:
