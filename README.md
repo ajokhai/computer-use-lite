@@ -188,6 +188,14 @@ Each run's surprises became a fix in the code or a lesson in memory, so the next
 - **A small local model (1.5B, text-only) can't do the tweet task yet.** Through MCP it went to the link in the task instead of x.com, the same trap Jev fell into early on, and then stalled. As the app's own model it couldn't start, because the server rejects screenshots; that was a crash and is now a clear message. An 8B vision model (Qwen3-VL) got much closer: it found the compose page and typed the right text, but missed the Post button and reported success anyway. A check of the model's own "done" against the screen is the next fix. Two harness bugs made the first runs slower than they had to be: trimming the history every turn threw away the local model's prompt cache, and llama.cpp's 8 GB default prompt cache pushed the model over its memory budget. Both are fixed. A bigger model isn't automatically better at this: InternVL3 14B sees screens well, but it isn't trained for OpenAI-style tool calls, so it sometimes wrote the call as text and stopped. Tool-calling training matters as much as size. One more lesson: an agent's keystrokes go to whichever window has focus, even on another display, so typing with no field selected paused and muted a video on a second screen. `--main-display-only` now refuses that.
 - **The checker had bugs too:** it wanted 69104 and rejected Gemini's correct "69,104"; deleted notes stay in Recently Deleted, and Calendar lists reminders as events. It now handles all three.
 
+## Support
+
+Computer Use is free and open source. If it's useful to you:
+
+- [Buy me a malt](https://buymeamalt.com/@ajokhai) (a one-off tip)
+- Star this repo, and [Model Launcher](https://github.com/ajokhai/model-launcher) too
+- [Run the benchmark](docs/benchmark.md) on your Mac and share the result
+
 ## Contributing: ports and improvements
 Computer Use is open source, and help is welcome.
 - **Windows and Linux ports:** it's macOS only for now. The draft pull requests for [Linux](https://github.com/ajokhai/computer-use-lite/pull/1) and [Windows](https://github.com/ajokhai/computer-use-lite/pull/2) each link a guide: port one Rust trait, and every MCP tool works on the new system. Comment on a PR to claim a piece.
