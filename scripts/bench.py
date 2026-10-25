@@ -27,9 +27,12 @@ MODELS = {
     # llama.cpp's llama-server on this Mac (Llama.app), as the local model
     "llama": ("vision", {"vision_model": "local:llama", "local_model": "llama",
                          "local_url": "http://127.0.0.1:8080/v1"}),
+    # served by Model Launcher (github.com/ajokhai/model-launcher), which loads it on request
+    "qwen3-vl": ("vision", {"vision_model": "local:qwen3-vl-8b", "local_model": "qwen3-vl-8b",
+                            "local_url": "http://127.0.0.1:11500/v1"}),
 }
 LABELS = {"jev": "Jev", "gemini": "Gemini", "claude": "Claude", "claude-sonnet": "Claude Sonnet",
-          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama"}
+          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama", "qwen3-vl": "Qwen3-VL"}
 
 TASKS = {
     "tweet": ("In Google Chrome, switch to the profile named \"familymake\", go to x.com, and post a tweet "

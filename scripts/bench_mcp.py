@@ -52,6 +52,17 @@ def text_of(result: dict, limit: int) -> str:
     return out if len(out) <= limit else out[:limit] + "\n…(cut)"
 
 
+def fit(msgs: list, keep: int) -> list:
+    """The task plus the most recent turns, so a long run fits a small model's context. Starts the
+    recent part at an assistant turn so no tool result loses the call it answers."""
+    if len(msgs) <= keep + 2:
+        return msgs
+    tail = msgs[-keep:]
+    while tail and tail[0].get("role") != "assistant":
+        tail = tail[1:]
+    return msgs[:2] + tail
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--url", required=True)
@@ -61,6 +72,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--max-turns", type=int, default=40)
     ap.add_argument("--result-chars", type=int, default=6000)
+    ap.add_argument("--keep", type=int, default=16, help="recent messages sent each turn, besides the task")
     ap.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = ap.parse_args()
 
@@ -79,7 +91,7 @@ def main():
             if time.monotonic() - t0 > a.timeout:
                 result = f"stopped: TIMED OUT after {a.timeout}s"
                 break
-            m = client.chat.completions.create(model=a.model, messages=msgs, tools=tools).choices[0].message
+            m = client.chat.completions.create(model=a.model, messages=fit(msgs, a.keep), tools=tools).choices[0].message
             msgs.append(m.model_dump(exclude_none=True))
             if not m.tool_calls:
                 result = f"stopped: replied without a tool call: {(m.content or '')[:200]!r}"
