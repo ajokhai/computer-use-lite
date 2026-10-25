@@ -137,7 +137,7 @@ Computer Use gets better at your apps the more it's used, whichever model does t
 - Your clipboard never leaves your Mac.
 
 ## Benchmarks
-Live runs on a real Mac (October 2026), checked by hand or by script, not by the model's own word. A run gets **10 minutes in total**, cleanup included, or it fails. Afterwards the benchmark deletes anything the run made, quits the apps it opened, and closes the windows it left, whatever the model did. Raw logs are in `bench-results.jsonl`; run them yourself with `scripts/bench.py` (it drives the real Mac).
+Live runs on a real Mac (October 2026), checked by hand or by script, not by the model's own word. A run gets **10 minutes in total**, cleanup included, or it fails. Afterwards the benchmark deletes anything the run made, quits the apps it opened, and closes the windows it left, whatever the model did. Raw logs are in `bench-results.jsonl`; run them yourself with `scripts/bench.py` (it drives the real Mac). To test a local model of your own, see [Run the benchmark on your own model](docs/benchmark.md).
 
 ![Benchmark results: the tweet and desk tasks for Claude, Gemini and Jev](docs/images/benchmark-results.png)
 

@@ -148,12 +148,16 @@ def main():
     ap.add_argument("--result-chars", type=int, default=6000)
     ap.add_argument("--keep", type=int, default=24, help="most messages kept besides the task; past it the older half is dropped")
     ap.add_argument("--element-limit", type=int, default=250, help="default limit for list_screen_elements (before filtering)")
+    ap.add_argument("--profile", default="familymake", help='Chrome profile for the tweet task; "" uses whichever is open')
     ap.add_argument("--main-display-only", action="store_true", help="hide and refuse everything off the built-in display")
     ap.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = ap.parse_args()
 
     stamp = time.strftime("%H%M%S")
     task = TASKS[a.task].format(label=a.label, stamp=stamp)
+    if a.profile != "familymake":
+        swap = f'switch to the profile named "{a.profile}", ' if a.profile else ""
+        task = task.replace('switch to the profile named "familymake", ', swap)
     client = openai.OpenAI(base_url=a.url, api_key="not-needed", max_retries=1, timeout=300)
     mcp = Mcp()
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
