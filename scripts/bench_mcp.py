@@ -76,11 +76,14 @@ def raise_main_chrome():
 
 
 def focus_on_main() -> bool:
-    """Whether the window that gets keystrokes (the frontmost app's front window) is on the built-in
-    display. Unknown counts as no."""
+    """Whether the window that gets keystrokes (the frontmost app's focused window) is on the
+    built-in display. Asks for AXFocusedWindow: "window 1" can be another, nameless window of the
+    same app (Chrome lists a strip on the other display first). Unknown counts as no."""
     r = subprocess.run(["osascript", "-e", '''tell application "System Events"
         set p to first application process whose frontmost is true
-        return position of window 1 of p
+        set w to value of attribute "AXFocusedWindow" of p
+        set {x, y} to position of w
+        return (x as text) & "," & (y as text)
     end tell'''], capture_output=True, text=True, timeout=10)
     try:
         x, y = (int(v.strip()) for v in r.stdout.split(","))
