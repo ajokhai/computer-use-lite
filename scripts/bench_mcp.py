@@ -7,6 +7,7 @@ task to the app's own agent and the run would no longer be about this model. Res
 
 import argparse
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -52,15 +53,85 @@ def text_of(result: dict, limit: int) -> str:
     return out if len(out) <= limit else out[:limit] + "\n…(cut)"
 
 
+# The built-in display is the main one, at (0, 0); anything at negative coordinates is on another
+# display (here, an LG to its upper left). With --main-display-only the model never sees or touches it.
+AT = re.compile(r" at \((-?\d+),(-?\d+)\)")
+
+
+def on_main(line: str) -> bool:
+    m = AT.search(line)
+    return not m or (int(m.group(1)) >= 0 and int(m.group(2)) >= 0)
+
+
+def raise_main_chrome():
+    """Brings the Chrome window on the built-in display to the front, so URLs open there."""
+    subprocess.run(["osascript", "-e", '''tell application "Google Chrome"
+        repeat with w in windows
+            if item 1 of (get bounds of w) >= 0 and item 2 of (get bounds of w) >= 0 then
+                set index of w to 1
+                exit repeat
+            end if
+        end repeat
+    end tell'''], capture_output=True, timeout=10)
+
+
+def focus_on_main() -> bool:
+    """Whether the window that gets keystrokes (the frontmost app's front window) is on the built-in
+    display. Unknown counts as no."""
+    r = subprocess.run(["osascript", "-e", '''tell application "System Events"
+        set p to first application process whose frontmost is true
+        return position of window 1 of p
+    end tell'''], capture_output=True, text=True, timeout=10)
+    try:
+        x, y = (int(v.strip()) for v in r.stdout.split(","))
+    except ValueError:
+        return False
+    return x >= 0 and y >= 0
+
+
+class MainDisplayGuard:
+    """Filters observations to the built-in display and refuses actions aimed anywhere else."""
+
+    def __init__(self):
+        self.ids: set[str] = set()
+
+    def before(self, name: str, args: dict) -> str | None:
+        """A refusal message, or None to let the call through (args may be adjusted)."""
+        if name in ("open_url", "open_app") or (name == "focus_window" and "chrome" in str(args.get("app", "")).lower()):
+            raise_main_chrome()
+            if name == "focus_window":
+                return "Focused the Chrome window on this display."
+        if name in ("type_text", "press_keys") and not args.get("element") and not focus_on_main():
+            # keystrokes go to whatever window has focus; on another display that can be someone's video
+            return "Refused: keyboard focus is on another display. Click a text field on this display first (type_text with its element id)."
+        if name == "click_at" and (args.get("x", 0) < 0 or args.get("y", 0) < 0):
+            return "Refused: that point is on another display. Work on the main display only."
+        el = args.get("element")
+        if name in ("click_element", "type_text", "read_element", "scroll") and el:
+            if el not in self.ids:
+                return "Refused: use an element id (like e12) from your latest list_screen_elements; only elements on this display can be used."
+        return None
+
+    def after(self, name: str, out: str) -> str:
+        if name in ("list_screen_elements", "list_windows"):
+            lines = [ln for ln in out.splitlines() if on_main(ln)]
+            if name == "list_screen_elements":
+                self.ids = {ln.split()[0] for ln in lines if ln[:1] == "e" and ln.split()[0][1:].isdigit()}
+            return "\n".join(lines)
+        return out
+
+
 def fit(msgs: list, keep: int) -> list:
-    """The task plus the most recent turns, so a long run fits a small model's context. Starts the
-    recent part at an assistant turn so no tool result loses the call it answers."""
+    """Keeps a long run inside a small model's context without breaking its prompt cache. The
+    history is only ever appended to; when it outgrows `keep` messages, the older half is dropped in
+    one go (one cache miss), cutting at an assistant turn so no tool result loses its call."""
     if len(msgs) <= keep + 2:
         return msgs
-    tail = msgs[-keep:]
+    tail = msgs[-(keep // 2):]
     while tail and tail[0].get("role") != "assistant":
         tail = tail[1:]
-    return msgs[:2] + tail
+    msgs[2:] = tail  # trim in place, so the next turns share this new prefix
+    return msgs
 
 
 def main():
@@ -72,7 +143,9 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--max-turns", type=int, default=40)
     ap.add_argument("--result-chars", type=int, default=6000)
-    ap.add_argument("--keep", type=int, default=16, help="recent messages sent each turn, besides the task")
+    ap.add_argument("--keep", type=int, default=24, help="most messages kept besides the task; past it the older half is dropped")
+    ap.add_argument("--element-limit", type=int, default=250, help="default limit for list_screen_elements (before filtering)")
+    ap.add_argument("--main-display-only", action="store_true", help="hide and refuse everything off the built-in display")
     ap.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = ap.parse_args()
 
@@ -83,6 +156,9 @@ def main():
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
                                                "parameters": t.get("inputSchema") or {"type": "object"}}}
              for t in mcp.call("tools/list", {}).get("tools", []) if t["name"] not in HIDDEN]
+    guard = MainDisplayGuard() if a.main_display_only else None
+    if guard:
+        raise_main_chrome()
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": task}]
     log, calls, result, t0 = [], 0, "stopped: ran out of turns", time.monotonic()
     print(f"▶ {a.label} via cu-mcp ({len(tools)} tools) [stamp {stamp}]: {task}", flush=True)
@@ -106,7 +182,16 @@ def main():
                 line = f"  {tc.function.name} {json.dumps(args)[:160]}"
                 print(line, flush=True)
                 log.append(line)
-                out = text_of(mcp.call("tools/call", {"name": tc.function.name, "arguments": args}), a.result_chars)
+                if tc.function.name == "list_screen_elements":
+                    args.setdefault("limit", a.element_limit)  # a whole list the model can read beats a cut-off one
+                refusal = guard.before(tc.function.name, args) if guard else None
+                if refusal:
+                    out = refusal
+                else:
+                    raw = mcp.call("tools/call", {"name": tc.function.name, "arguments": args})
+                    out = text_of(raw, 10**7)
+                    out = guard.after(tc.function.name, out) if guard else out
+                    out = out if len(out) <= a.result_chars else out[:a.result_chars] + "\n…(cut)"
                 msgs.append({"role": "tool", "tool_call_id": tc.id, "content": out})
                 finished |= tc.function.name == "task_done"
             if finished:
