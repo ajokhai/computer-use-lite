@@ -1,7 +1,7 @@
 [project]
 name = "cu"
 version = "0.1.16"
-description = "Lite macOS computer-use harness: Gemini plans, Jev acts"
+description = "AI computer use for the whole Mac, with any AI: a native MCP server, a menu bar agent and benchmarks"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

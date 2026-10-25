@@ -1,7 +1,10 @@
 """Benchmark your own model on the Mac, in one command, then share the result.
 
-    python3 scripts/benchmark.py            run the tweet test with the model loaded in Model Launcher
-    python3 scripts/benchmark.py report     every run so far, as one table (and summary.md)
+    python3 scripts/benchmark.py                 run the tweet test with the model loaded in Model Launcher
+    python3 scripts/benchmark.py --task NAME     run one of your own benchmarks instead
+    python3 scripts/benchmark.py new             make a benchmark of your own
+    python3 scripts/benchmark.py list            the benchmarks you can run
+    python3 scripts/benchmark.py report          every run so far, as one table (and summary.md)
 
 Needs only the Python that comes with macOS, Computer Use (for cu-mcp) and a model server: Model
 Launcher is found on its own; for LM Studio, Ollama or llama.cpp pass --url and --model. Every run
@@ -25,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_mcp import CU_MCP, run  # noqa: E402
 
 OUT = Path.home() / "Documents" / "Computer Use Benchmarks"
+TASKS_DIR = OUT / "tasks"  # one JSON file per benchmark; Model Launcher's Benchmark page uses the same
 ML = "http://127.0.0.1:11500"
 REPO = "https://github.com/ajokhai/computer-use-lite"
 
@@ -90,6 +94,25 @@ def pick_model(a) -> tuple[str, str, str, dict]:
     return f"{ML}/v1", mid, a.label or name.split(" ")[0], {"name": name, "size_gb": m.get("size_gb"), "vision": m.get("vision")}
 
 
+def tweet_task() -> dict:
+    return {"id": "tweet", "name": "Post a tweet", "minutes": 10, "check": "Open your X profile. Did the tweet post?",
+            "prompt": ("In Google Chrome, go to x.com, and post a tweet saying that you, {model}, are testing computer use with this account, "
+                       f"and include the link {REPO}. The wording is up to you; for example: "
+                       f'"This is {{model}} testing computer use with my account. {REPO}"')}
+
+
+def tasks() -> list:
+    out = []
+    for f in sorted(TASKS_DIR.glob("*.json")):
+        try:
+            t = json.loads(f.read_text())
+        except ValueError:
+            continue
+        out.append({"id": f.stem, "name": t.get("name", f.stem), "prompt": t.get("prompt", ""),
+                    "check": t.get("check") or "Did it work?", "minutes": int(t.get("minutes") or 10)})
+    return [tweet_task()] + sorted(out, key=lambda t: t["name"].lower())
+
+
 def ask(q: str) -> bool:
     return input(f"{q} [y/n] ").strip().lower().startswith("y")
 
@@ -100,7 +123,9 @@ def report_md(r: dict) -> str:
     size = f" · {r['size_gb']:.1f} GB" if r.get("size_gb") else ""
     sees = " · reads images" if r.get("vision") else ""
     lines = [f"# {r['model_name']}: {v}", "",
-             f"- **Task:** {r['task']} (post a tweet from Chrome naming the model and linking {REPO})",
+             f"- **Benchmark:** {r.get('task_name', r['task'])}",
+             f"- **Instructions:** {r.get('prompt', '')}",
+             f"- **Checked by:** {r.get('check', '')}",
              f"- **Result:** {r['seconds']} s, {r['actions']} tool calls. {r['result']}",
              f"- **Model:** {r['model_name']} (`{r['model_id']}`){sees}{size}",
              f"- **Server:** {r['url']}",
@@ -112,8 +137,8 @@ def report_md(r: dict) -> str:
 
 def share(r: dict, path: Path):
     verdict = {"pass": "passed", "fail": "failed"}.get(r["verdict"], "ran")
-    tweet = f"{r['model_name']} {verdict} the Computer Use tweet test on my {r['machine']['ram_gb']} GB Mac: {r['seconds']} s, {r['actions']} tool calls. {REPO}"
-    title = f"Benchmark: {r['model_name']} {verdict} ({r['machine']['ram_gb']} GB Mac)"
+    tweet = f"{r['model_name']} {verdict} the \"{r['task_name']}\" computer-use test on my {r['machine']['ram_gb']} GB Mac: {r['seconds']} s, {r['actions']} tool calls. {REPO}"
+    title = f"Benchmark: {r['model_name']} {verdict} \"{r['task_name']}\" ({r['machine']['ram_gb']} GB Mac)"
     issue = f"{REPO}/issues/new?" + urllib.parse.urlencode({"title": title, "body": path.read_text()[:6000]})
     print(f"\nReport saved: {path}\n\nShare it:\n  Post on X:  https://x.com/intent/post?{urllib.parse.urlencode({'text': tweet})}\n  Or open an issue (report filled in):  {issue[:120]}…\n")
     if ask("Open the GitHub issue with this report filled in?"):
@@ -123,25 +148,56 @@ def share(r: dict, path: Path):
 def cmd_run(a):
     if not Path(CU_MCP).exists():
         sys.exit(f"Computer Use isn't installed ({CU_MCP} is missing). Get it from {REPO}/releases.")
+    task = next((t for t in tasks() if t["id"] == a.task), None)
+    if not task:
+        sys.exit(f"No benchmark called {a.task!r}. See: python3 scripts/benchmark.py list")
     url, mid, label, info = pick_model(a)
     mc = machine()
     main_only = mc["displays"] > 1
-    print(f"\nTesting {info.get('name', label)} on the tweet task.\n"
-          "It will drive this Mac for up to 10 minutes: Chrome, x.com, and a tweet from the account you're signed in to.\n"
+    what = ("Chrome, x.com, and a tweet from the account you're signed in to" if task["id"] == "tweet"
+            else task["prompt"].replace("{model}", label))
+    print(f"\nTesting {info.get('name', label)} on \"{task['name']}\".\n"
+          f"It will drive this Mac for up to {task['minutes']} minutes: {what}\n"
           + ("It stays on your built-in display, so your other screen is left alone.\n" if main_only else "")
           + "Stop it any time: press Escape three times, or move the mouse hard into a screen corner.")
     if not a.yes and not ask("Start?"):
         return
     OUT.mkdir(parents=True, exist_ok=True)
-    r = run(url, mid, label, profile=a.profile, main_display_only=main_only, out=None)
-    posted = None if a.yes else ask("\nOpen your X profile: is the tweet there?")
-    r.update(verdict={True: "pass", False: "fail", None: "unchecked"}[posted], model_id=mid, model_name=info.get("name", label),
+    prompt = task["prompt"]
+    if task["id"] == "tweet" and a.profile:
+        prompt = prompt.replace("In Google Chrome, go to x.com", f'In Google Chrome, switch to the profile named "{a.profile}", go to x.com')
+    r = run(url, mid, label, main_display_only=main_only, out=None, prompt=prompt, timeout=task["minutes"] * 60)
+    posted = None if a.yes else ask(f"\n{task['check']}")
+    r.update(task=task["id"], task_name=task["name"], prompt=prompt.replace("{model}", label), check=task["check"], verdict={True: "pass", False: "fail", None: "unchecked"}[posted], model_id=mid, model_name=info.get("name", label),
              size_gb=info.get("size_gb"), vision=info.get("vision"), url=url, machine=mc, source="cli")
     with open(OUT / "results.jsonl", "a") as f:
         f.write(json.dumps(r) + "\n")
     path = OUT / f"{time.strftime('%Y-%m-%d %H%M')} {r['model_name']}.md"
     path.write_text(report_md(r))
     share(r, path)
+
+
+def cmd_list(_a):
+    for t in tasks():
+        print(f"{t['id']:<28} {t['name']}  ({t['minutes']} min)")
+    print(f"\nYour benchmarks live in {TASKS_DIR}. Make one: python3 scripts/benchmark.py new")
+
+
+def cmd_new(_a):
+    print("A benchmark is a task for the model and a question you answer afterwards.\n")
+    name = input("Name (e.g. Shopping list in Notes): ").strip()
+    prompt = input("What the model should do ({model} becomes its name):\n> ").strip()
+    check = input("How you'll check it (e.g. Is the note in Notes?): ").strip() or "Did it work?"
+    minutes = int(input("Time limit in minutes [10]: ").strip() or 10)
+    if not name or not prompt:
+        sys.exit("A benchmark needs a name and instructions.")
+    slug = "-".join("".join(c if c.isalnum() else " " for c in name.lower()).split()) or "benchmark"
+    path, n = TASKS_DIR / f"{slug}.json", 2
+    while path.exists() or path.stem == "tweet":
+        path, n = TASKS_DIR / f"{slug}-{n}.json", n + 1
+    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"name": name, "prompt": prompt, "check": check, "minutes": max(1, min(60, minutes))}, indent=2))
+    print(f"\nSaved {path}\nRun it: python3 scripts/benchmark.py --task {path.stem}")
 
 
 def cmd_report(_a):
@@ -151,8 +207,8 @@ def cmd_report(_a):
             rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
     if not rows:
         sys.exit(f"No runs yet in {OUT}. Run: python3 scripts/benchmark.py")
-    head = "| When | Model | Mac | Verdict | Time | Calls | How it ended |\n|---|---|---|---|---|---|---|"
-    body = [f"| {r['at'][:16]} | {r.get('model_name', r['model'])} | {r.get('machine', {}).get('ram_gb', '?')} GB | "
+    head = "| When | Benchmark | Model | Mac | Verdict | Time | Calls | How it ended |\n|---|---|---|---|---|---|---|---|"
+    body = [f"| {r['at'][:16]} | {r.get('task_name', r.get('task', ''))} | {r.get('model_name', r['model'])} | {r.get('machine', {}).get('ram_gb', '?')} GB | "
             f"{ {'pass': '✅ pass', 'fail': '❌ fail'}.get(r.get('verdict'), '❔') } | {r['seconds']} s | {r['actions']} | "
             f"{r['result'][:70].replace('|', '/')} |" for r in rows]
     passed = sum(r.get("verdict") == "pass" for r in rows)
@@ -164,14 +220,15 @@ def cmd_report(_a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "report"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "new", "list", "report"])
+    ap.add_argument("--task", default="tweet", help="which benchmark to run (see: list); default: the tweet test")
     ap.add_argument("--model", help="model id (Model Launcher) or name (other servers); default: the loaded one")
     ap.add_argument("--url", help="another OpenAI-compatible server, e.g. http://127.0.0.1:1234/v1 (LM Studio)")
     ap.add_argument("--label", help="the name the model uses for itself in the tweet")
     ap.add_argument("--profile", default="", help="Chrome profile to switch to first; default: whichever is open")
     ap.add_argument("--yes", action="store_true", help="don't ask anything (verdict stays unchecked)")
     a = ap.parse_args()
-    (cmd_report if a.command == "report" else cmd_run)(a)
+    {"run": cmd_run, "new": cmd_new, "list": cmd_list, "report": cmd_report}[a.command](a)
 
 
 if __name__ == "__main__":

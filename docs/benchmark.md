@@ -1,6 +1,6 @@
 # Run the benchmark on your own model
 
-The tweet test: your model, driving the Mac through Computer Use, opens Chrome, goes to x.com and posts a tweet that names the model and links this repo. It gets 10 minutes. Afterwards you check X and get a report you can share.
+The built-in test is the tweet test: your model, driving the Mac through Computer Use, opens Chrome, goes to x.com and posts a tweet that names the model and links this repo. It gets 10 minutes. Afterwards you check X and get a report you can share.
 
 You need two apps:
 
@@ -34,6 +34,24 @@ python3 scripts/benchmark.py --profile "Work"                         # switch C
 ```
 
 With more than one display, the model is kept on the built-in one, so it can't type into a window on another screen. Stop it any time: press **Escape three times**, or move the mouse hard into a screen corner.
+
+## Make your own benchmark
+
+The tweet test is one task. Write your own for anything you want a model to do on a Mac:
+
+- **In Model Launcher:** Benchmark › **+ New benchmark**. Give it a name, what the model should do, the question you'll answer to check it, and a time limit.
+- **From the command line:** `python3 scripts/benchmark.py new` asks the same questions. Then `python3 scripts/benchmark.py list` shows it, and `python3 scripts/benchmark.py --task <name>` runs it.
+
+Write the instructions like you'd ask a person, and be specific: which app, what to type, what counts as done. `{model}` becomes the model's name. Each benchmark is a small JSON file in `~/Documents/Computer Use Benchmarks/tasks`, so both ways see the same list, and you can send the file to someone so they can run the same test:
+
+```json
+{
+  "name": "Shopping list in Notes",
+  "prompt": "Open Notes, make a new note titled \"Groceries\" and list milk, eggs and bread, one per line.",
+  "check": "Is the Groceries note in Notes with all three items?",
+  "minutes": 5
+}
+```
 
 ## Where results go
 

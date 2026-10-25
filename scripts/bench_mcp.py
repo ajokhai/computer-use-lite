@@ -173,13 +173,13 @@ def main():
 
 def run(url: str, model: str, label: str, *, task: str = "tweet", profile: str = "familymake", main_display_only: bool = False,
         timeout: int = 600, max_turns: int = 40, result_chars: int = 6000, keep: int = 24, element_limit: int = 250,
-        out: str | None = None) -> dict:
+        out: str | None = None, prompt: str | None = None) -> dict:
     """Runs one benchmark and returns its result (also appended to `out` as a JSON line)."""
     a = argparse.Namespace(url=url, model=model, label=label, task=task, profile=profile, main_display_only=main_display_only,
                            timeout=timeout, max_turns=max_turns, result_chars=result_chars, keep=keep,
                            element_limit=element_limit, out=out)
     stamp = time.strftime("%H%M%S")
-    task = TASKS[a.task].format(label=a.label, stamp=stamp)
+    task = prompt.replace("{model}", a.label) if prompt else TASKS[a.task].format(label=a.label, stamp=stamp)
     if a.profile != "familymake":
         swap = f'switch to the profile named "{a.profile}", ' if a.profile else ""
         task = task.replace('switch to the profile named "familymake", ', swap)
