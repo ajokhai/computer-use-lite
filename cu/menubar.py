@@ -22,7 +22,7 @@ from AppKit import (
     NSWorkspace,
 )
 
-from . import __version__, integration, onboarding, replies, say, updater, usage, voicepack
+from . import __version__, integration, onboarding, replies, say, support, updater, usage, voicepack
 from .config import DATA, LOG, load_keys, load_settings, save_settings
 from .shortcut import DEFAULT, PRESETS, Detector, Shortcut, clashes_with_dictation
 from .logger import CRASH_LOG, rotate, setup_logging
@@ -144,11 +144,21 @@ class MenuBar(rumps.App):
             rumps.MenuItem(f"Version {__version__}", callback=None),
         ])
 
+        self.tip_item = rumps.MenuItem(support.DEFAULT + "…", callback=lambda _: _open_link(support.URL))
+        support_menu = rumps.MenuItem("Support Computer Use")
+        _fill(support_menu, [
+            self.tip_item,
+            rumps.MenuItem("Star on GitHub…", callback=lambda _: _open_link(support.REPO)),
+            rumps.MenuItem("Benchmark Your Own Model…", callback=lambda _: _open_link(f"{support.REPO}/blob/main/docs/benchmark.md")),
+            rumps.MenuItem("Report a Bug or Idea…", callback=lambda _: _open_link(f"{support.REPO}/issues/new")),
+        ])
+        threading.Thread(target=lambda: self.events.put(("support_label", support.label())), daemon=True).start()
+
         self.menu = [
             self.setup_item, self.status, self.last, self.stop_item, None,
             self.ask, None,
             mode_menu, voice_menu, self.usage_menu, self.skills_menu, None,
-            working_menu, connect_menu, settings_menu, None,
+            working_menu, connect_menu, settings_menu, support_menu, None,
             rumps.MenuItem("Quit Computer Use", callback=self.quit, key="q"),
         ]
         usage.clear_exhausted()
@@ -1129,6 +1139,9 @@ class MenuBar(rumps.App):
             if kind == "update":
                 self.on_update_checked(*payload)
                 continue
+            if kind == "support_label":
+                self.tip_item.title = payload + "…"
+                continue
             if kind == "update_progress":
                 self.update_item.title = payload
                 if self.agent is None:
@@ -1273,6 +1286,11 @@ def dictation_on() -> bool:
 def _short(s: str, n: int = 40) -> str:
     s = " ".join(s.split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _open_link(url):
+    import webbrowser
+    webbrowser.open(url)
 
 
 def _open(path):

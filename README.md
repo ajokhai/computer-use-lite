@@ -192,7 +192,7 @@ Each run's surprises became a fix in the code or a lesson in memory, so the next
 
 Computer Use is free and open source. If it's useful to you:
 
-- [Buy me a malt](https://buymeamalt.com/@ajokhai) (a one-off tip)
+- [Buy me a drink](https://buymeamalt.com/@ajokhai) (a one-off tip)
 - Star this repo, and [Model Launcher](https://github.com/ajokhai/model-launcher) too
 - [Run the benchmark](docs/benchmark.md) on your Mac and share the result
 
