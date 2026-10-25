@@ -13,7 +13,7 @@ from typing import Callable
 
 import openai
 
-from .. import actions, narrate as narration
+from .. import actions, narrate as narration, usage
 from ..screen import ax_elements
 from .base import Declined, Guard, Shot, VisionModel, data_url, open_app, parse_json, sleep
 
@@ -62,7 +62,14 @@ class Compatible(VisionModel):
         return isinstance(err, openai.APIConnectionError)
 
     def _request(self, model: str, **kw):
-        resp = self.client.chat.completions.create(model=model.split(":", 1)[1], **kw)
+        try:
+            resp = self.client.chat.completions.create(model=model.split(":", 1)[1], **kw)
+        except openai.APIStatusError as e:
+            # e.g. llama-server without --mmproj: say so plainly instead of failing with a server error
+            if "image input is not supported" in str(e):
+                raise RuntimeError(f"{usage.pretty(model)} is text-only and can't see screenshots: pick a vision "
+                                   "model, or let it drive the Mac through the MCP tools") from e
+            raise
         return (resp, *_usage(resp))
 
     def _chat(self, system: str, text: str, png: bytes) -> str:

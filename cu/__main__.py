@@ -41,6 +41,8 @@ def main():
             agent.run(" ".join(a.task))
     except KeyboardInterrupt:
         sys.exit("\naborted")
+    except RuntimeError as e:  # a setup problem (e.g. a text-only model): one line, not a traceback
+        sys.exit(f"stopped: {e}")
 
 
 def doctor():

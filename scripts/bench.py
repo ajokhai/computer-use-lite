@@ -24,9 +24,12 @@ MODELS = {
     "openai": ("vision", {"vision_model": "gpt-6.1-sol"}),
     "hybrid-gemini": ("hybrid", {"vision_model": "gemini-3.8-flash"}),
     "hybrid-claude": ("hybrid", {"vision_model": "claude-opus-5-5"}),
+    # llama.cpp's llama-server on this Mac (Llama.app), as the local model
+    "llama": ("vision", {"vision_model": "local:llama", "local_model": "llama",
+                         "local_url": "http://127.0.0.1:8080/v1"}),
 }
 LABELS = {"jev": "Jev", "gemini": "Gemini", "claude": "Claude", "claude-sonnet": "Claude Sonnet",
-          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev"}
+          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama"}
 
 TASKS = {
     "tweet": ("In Google Chrome, switch to the profile named \"familymake\", go to x.com, and post a tweet "
