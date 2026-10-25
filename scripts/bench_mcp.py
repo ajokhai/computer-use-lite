@@ -5,6 +5,8 @@
 Same live tasks as scripts/bench.py, so it posts for real. computer_task is left out: it would hand the
 task to the app's own agent and the run would no longer be about this model. Results go to bench-results.jsonl."""
 
+
+from __future__ import annotations
 import argparse
 import json
 import re
@@ -12,7 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
-import openai
+import urllib.request
 
 from bench import PROJECT, TASKS
 
@@ -20,6 +22,19 @@ CU_MCP = "/Applications/Computer Use.app/Contents/Frameworks/cu-mcp"
 HIDDEN = {"computer_task"}
 SYSTEM = ("You operate this Mac through the tools. Look (list_screen_elements), do one action, then look again. "
           "Prefer open_url, press_keys and click_element. Call task_done when the task is finished.")
+
+
+def chat(url: str, model: str, messages: list, tools: list, timeout: int = 300) -> dict:
+    """One chat completion from any OpenAI-compatible server; returns the reply message. Standard
+    library only, so running a benchmark needs nothing installed."""
+    body = json.dumps({"model": model, "messages": messages, "tools": tools}).encode()
+    req = urllib.request.Request(url.rstrip("/") + "/chat/completions", body, {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)["choices"][0]["message"]
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:300]
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from None
 
 
 class Mcp:
@@ -152,13 +167,22 @@ def main():
     ap.add_argument("--main-display-only", action="store_true", help="hide and refuse everything off the built-in display")
     ap.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = ap.parse_args()
+    run(a.url, a.model, a.label, task=a.task, profile=a.profile, main_display_only=a.main_display_only, timeout=a.timeout,
+        max_turns=a.max_turns, result_chars=a.result_chars, keep=a.keep, element_limit=a.element_limit, out=a.out)
 
+
+def run(url: str, model: str, label: str, *, task: str = "tweet", profile: str = "familymake", main_display_only: bool = False,
+        timeout: int = 600, max_turns: int = 40, result_chars: int = 6000, keep: int = 24, element_limit: int = 250,
+        out: str | None = None) -> dict:
+    """Runs one benchmark and returns its result (also appended to `out` as a JSON line)."""
+    a = argparse.Namespace(url=url, model=model, label=label, task=task, profile=profile, main_display_only=main_display_only,
+                           timeout=timeout, max_turns=max_turns, result_chars=result_chars, keep=keep,
+                           element_limit=element_limit, out=out)
     stamp = time.strftime("%H%M%S")
     task = TASKS[a.task].format(label=a.label, stamp=stamp)
     if a.profile != "familymake":
         swap = f'switch to the profile named "{a.profile}", ' if a.profile else ""
         task = task.replace('switch to the profile named "familymake", ', swap)
-    client = openai.OpenAI(base_url=a.url, api_key="not-needed", max_retries=1, timeout=300)
     mcp = Mcp()
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
                                                "parameters": t.get("inputSchema") or {"type": "object"}}}
@@ -174,33 +198,34 @@ def main():
             if time.monotonic() - t0 > a.timeout:
                 result = f"stopped: TIMED OUT after {a.timeout}s"
                 break
-            m = client.chat.completions.create(model=a.model, messages=fit(msgs, a.keep), tools=tools).choices[0].message
-            msgs.append(m.model_dump(exclude_none=True))
-            if not m.tool_calls:
-                result = f"stopped: replied without a tool call: {(m.content or '')[:200]!r}"
+            m = chat(a.url, a.model, fit(msgs, a.keep), tools)
+            msgs.append({k: v for k, v in m.items() if v is not None})
+            if not m.get("tool_calls"):
+                result = f"stopped: replied without a tool call: {(m.get('content') or '')[:200]!r}"
                 break
             finished = False
-            for tc in m.tool_calls:
+            for tc in m["tool_calls"]:
                 calls += 1
+                name = tc["function"]["name"]
                 try:
-                    args = json.loads(tc.function.arguments or "{}")
+                    args = json.loads(tc["function"].get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                line = f"  {tc.function.name} {json.dumps(args)[:160]}"
+                line = f"  {name} {json.dumps(args)[:160]}"
                 print(line, flush=True)
                 log.append(line)
-                if tc.function.name == "list_screen_elements":
+                if name == "list_screen_elements":
                     args.setdefault("limit", a.element_limit)  # a whole list the model can read beats a cut-off one
-                refusal = guard.before(tc.function.name, args) if guard else None
+                refusal = guard.before(name, args) if guard else None
                 if refusal:
                     out = refusal
                 else:
-                    raw = mcp.call("tools/call", {"name": tc.function.name, "arguments": args})
+                    raw = mcp.call("tools/call", {"name": name, "arguments": args})
                     out = text_of(raw, 10**7)
-                    out = guard.after(tc.function.name, out) if guard else out
+                    out = guard.after(name, out) if guard else out
                     out = out if len(out) <= a.result_chars else out[:a.result_chars] + "\n…(cut)"
-                msgs.append({"role": "tool", "tool_call_id": tc.id, "content": out})
-                finished |= tc.function.name == "task_done"
+                msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": out})
+                finished |= name == "task_done"
             if finished:
                 result = "done (model called task_done; check the post separately)"
                 break
@@ -212,8 +237,10 @@ def main():
          "seconds": round(time.monotonic() - t0, 1), "result": result, "actions": calls, "log_tail": log[-40:],
          "void": False, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "stamp": stamp}
     print(f"  {r['seconds']}s, {calls} tool calls: {result}", flush=True)
-    with open(a.out, "a") as f:
-        f.write(json.dumps(r) + "\n")
+    if a.out:
+        with open(a.out, "a") as f:
+            f.write(json.dumps(r) + "\n")
+    return r
 
 
 if __name__ == "__main__":

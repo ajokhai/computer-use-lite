@@ -6,6 +6,8 @@ This drives the real Mac (mouse, keyboard, apps) and may act on real accounts, s
 when that's what you want. The mouse in a screen corner stops a run. Correctness is checked
 separately (each task names its own check); results are appended to bench-results.jsonl."""
 
+
+from __future__ import annotations
 import argparse
 import json
 import subprocess
