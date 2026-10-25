@@ -22,7 +22,7 @@ CLIENTS = {
     "Claude": [(_SUPPORT / "Claude" / "claude_desktop_config.json", "mcpServers"),  # desktop app
                (Path.home() / ".claude.json", "mcpServers")],  # Claude Code, user scope
 }
-SERVER_NAME = "computer-use-lite"
+SERVER_NAME = "computer-use-lite"  # never "computer-use": Claude Code reserves that name and skips the server
 PROJECT = Path(__file__).resolve().parent.parent
 
 
@@ -111,6 +111,8 @@ def _write(path: Path, key: str, enabled: bool):
     if path.exists() and not backup.exists():
         backup.write_text(path.read_text())
     servers = data.setdefault(key, {})
+    for name in [n for n, v in servers.items() if n != SERVER_NAME and _is_ours(v)]:
+        del servers[name]  # cu-mcp added by hand under another name, e.g. the reserved "computer-use"
     if enabled:
         servers[SERVER_NAME] = _entry(key)
     else:
@@ -120,20 +122,30 @@ def _write(path: Path, key: str, enabled: bool):
     tmp.replace(path)  # atomic, so a running app never reads a half-written file
 
 
-def refresh_connections():
-    """Repoint existing entries at this copy of the app (e.g. after moving from the dev folder to the .app).
-    Only an installed copy does this, so running from the DMG or a build folder never steals the entries."""
+def _is_ours(server) -> bool:
+    return isinstance(server, dict) and Path(str(server.get("command", ""))).name == "cu-mcp"
+
+
+def refresh_connections(first_run: bool = False) -> bool:
+    """Repoint existing entries at this copy of the app (e.g. after moving from the dev folder to the .app),
+    and rename ones added by hand under another name. On the first run, connect every installed AI app, so
+    it works without a trip to Connect AI Apps. Only an installed copy does this, so running from the DMG
+    or a build folder never steals the entries. Returns whether it ran."""
     bundle = app_bundle()
     if bundle is None or bundle.parent not in (Path("/Applications"), Path.home() / "Applications"):
-        return
+        return False
     for client in CLIENTS:
         for path, key in _targets(client):
             try:
-                current = json.loads(path.read_text()).get(key, {}).get(SERVER_NAME)
-            except (OSError, ValueError):
+                servers = json.loads(path.read_text()).get(key, {})
+            except OSError:
+                servers = {}
+            except ValueError:
                 continue
-            if current is not None and current != _entry(key):
+            ours = {n: v for n, v in servers.items() if _is_ours(v)}
+            if (first_run and not ours) or (ours and ours != {SERVER_NAME: _entry(key)}):
                 _write(path, key, True)
+    return True
 
 
 def open_privacy_settings(pane: str):

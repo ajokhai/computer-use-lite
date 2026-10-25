@@ -56,7 +56,10 @@ class MenuBar(rumps.App):
     def __init__(self):
         super().__init__("Computer Use", title="CU", quit_button=None)
         self.settings = load_settings()
-        integration.refresh_connections()
+        if integration.refresh_connections(first_run=not self.settings.get("clients_connected")) \
+                and not self.settings.get("clients_connected"):
+            self.settings["clients_connected"] = True
+            save_settings(self.settings)
         self.events: queue.Queue = queue.Queue()
         self.agent = None
         self.listener = None  # created on first use, so the mic is never touched unless you ask

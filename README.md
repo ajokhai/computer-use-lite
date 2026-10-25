@@ -20,12 +20,17 @@ It learns as it works: when an attempt fails it works out why and tries another 
 ## Let any AI drive the Mac (MCP)
 The app bundles `cu-mcp`, a native MCP server written in Rust. It needs no API key: the AI you already use does the thinking, and `cu-mcp` does the looking and clicking.
 
-- **Connect AI Apps** writes `cu-mcp` into the MCP config of Antigravity, VS Code, Cursor, Windsurf or Claude.
-- **Any other MCP client:** add a stdio server:
+- **Connect AI Apps** writes `cu-mcp` into the MCP config of Antigravity, VS Code, Cursor, Windsurf or Claude. The first time the installed app starts, it connects every one of these it finds, so there's nothing to tick.
+- **Any other MCP client, or adding it by hand:** add a stdio server named `computer-use-lite`. For Claude Code (CLI or the VS Code/Antigravity extension), that's the top-level `mcpServers` in `~/.claude.json`:
   ```json
-  {"command": "/Applications/Computer Use.app/Contents/Frameworks/cu-mcp", "args": []}
+  "mcpServers": {
+    "computer-use-lite": {"command": "/Applications/Computer Use.app/Contents/Frameworks/cu-mcp", "args": []}
+  }
   ```
+  or `claude mcp add --scope user computer-use-lite -- "/Applications/Computer Use.app/Contents/Frameworks/cu-mcp"`.
   Use the path where your copy of `cu-mcp` actually is. When you build from source, it's `crates/cu-native/target/release/cu-mcp`.
+- **Don't name it `computer-use`.** Claude Code reserves that name and silently skips the server: no tools, no error in the chat (`claude mcp list` shows the warning). The app renames such entries to `computer-use-lite` when it starts.
+- **Start a new chat after connecting.** MCP servers load when a session starts; a chat that was already open, or resumed, won't have the tools.
 - **Permissions belong to the app that starts the server.** That's your editor or AI app, so give it Accessibility and Screen Recording too. The `check_permissions` tool tells you what's missing.
 
 **Tools:** `take_screenshot`, `list_screen_elements`, `click_element`, `click_at`, `type_text`, `press_keys`, `scroll`, `drag`, `move_mouse`, `open_app`, `open_url`, `select_menu`, `read_element`, `list_windows`, `wait_for_change`, `speak`, `computer_task`, `check_permissions`, plus memory: `recall`, `remember`, `skills`, `save_skill` (see Learning).
