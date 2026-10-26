@@ -36,9 +36,11 @@ MODELS = {
     # the local model plans, Jev picks the elements
     "hybrid-local": ("hybrid", {"vision_model": "local:internvl3-14b", "local_model": "internvl3-14b",
                                 "local_url": "http://127.0.0.1:11500/v1"}),
+    "hybrid-qwen": ("hybrid", {"vision_model": "local:qwen3-vl-8b", "local_model": "qwen3-vl-8b",
+                               "local_url": "http://127.0.0.1:11500/v1"}),
 }
 LABELS = {"jev": "Jev", "gemini": "Gemini", "claude": "Claude", "claude-sonnet": "Claude Sonnet",
-          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama", "qwen3-vl": "Qwen3-VL", "hybrid-local": "InternVL3 and Jev"}
+          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama", "qwen3-vl": "Qwen3-VL", "hybrid-local": "InternVL3 and Jev", "hybrid-qwen": "Qwen3-VL and Jev"}
 
 TASKS = {
     "tweet": ("In Google Chrome, switch to the profile named \"familymake\", go to x.com, and post a tweet "
