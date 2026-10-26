@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
+MAIN_ONLY = False
 
 # name -> (mode, settings override)
 MODELS = {
@@ -32,9 +33,12 @@ MODELS = {
     # served by Model Launcher (github.com/ajokhai/model-launcher), which loads it on request
     "qwen3-vl": ("vision", {"vision_model": "local:qwen3-vl-8b", "local_model": "qwen3-vl-8b",
                             "local_url": "http://127.0.0.1:11500/v1"}),
+    # the local model plans, Jev picks the elements
+    "hybrid-local": ("hybrid", {"vision_model": "local:internvl3-14b", "local_model": "internvl3-14b",
+                                "local_url": "http://127.0.0.1:11500/v1"}),
 }
 LABELS = {"jev": "Jev", "gemini": "Gemini", "claude": "Claude", "claude-sonnet": "Claude Sonnet",
-          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama", "qwen3-vl": "Qwen3-VL"}
+          "openai": "OpenAI", "hybrid-gemini": "Gemini and Jev", "hybrid-claude": "Claude and Jev", "llama": "Llama", "qwen3-vl": "Qwen3-VL", "hybrid-local": "InternVL3 and Jev"}
 
 TASKS = {
     "tweet": ("In Google Chrome, switch to the profile named \"familymake\", go to x.com, and post a tweet "
@@ -106,6 +110,8 @@ def run(model: str, task: str, timeout: int) -> dict:
     cmd = [sys.executable, "-m", "cu", "--mode", mode, "--yolo", "--", task]
     # No switching: a run is about one model, so another one stepping in would make the result a lie.
     env = {**__import__("os").environ, "CU_SETTINGS": json.dumps({"auto_switch": False, **override})}
+    if MAIN_ONLY:
+        env["CU_MAIN_DISPLAY_ONLY"] = "1"
     t0 = time.monotonic()
     try:
         p = subprocess.run(cmd, cwd=PROJECT, env=env, capture_output=True, text=True, timeout=timeout)
@@ -132,8 +138,14 @@ def main():
     p.add_argument("--no-cleanup", action="store_true",
                    help="skip a model's own cleanup and delete the test items by exact name instead (for models "
                         "that can't see which item they'd delete, on a Mac with real data)")
+    p.add_argument("--main-display-only", action="store_true", help="the agent sees and acts on the built-in display only")
     p.add_argument("--out", default=str(PROJECT.parent / "bench-results.jsonl"))
     a = p.parse_args()
+    global MAIN_ONLY
+    MAIN_ONLY = a.main_display_only
+    if MAIN_ONLY:
+        from bench_mcp import raise_main_chrome
+        raise_main_chrome()
     for m in a.models:
         stamp = time.strftime("%H%M%S")  # unique per run, so a check can't be fooled by leftovers
         task = TASKS[a.task].format(label=LABELS[m], stamp=stamp)

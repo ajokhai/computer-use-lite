@@ -1,5 +1,6 @@
 """macOS screen state: screenshots and the accessibility (AX) tree of the frontmost app."""
 
+import os
 import io
 import subprocess
 import tempfile
@@ -233,8 +234,17 @@ def native_json(name: str, *args):
         lib.cu_free_string(ptr)
 
 
+def _main_display_only(elements: list[Element]) -> list[Element]:
+    """With CU_MAIN_DISPLAY_ONLY set (benchmarks), drop everything off the built-in display, which sits
+    at (0, 0): the agent can't see or click a window on another screen, like someone's video."""
+    if not os.environ.get("CU_MAIN_DISPLAY_ONLY"):
+        return elements
+    return [e for e in elements if e.x >= 0 and e.y >= 0]
+
+
 def _enrich_element_context(elements: list[Element]) -> list[Element]:
     """Enrich actionable elements that have generic or short labels with nearby text context."""
+    elements = _main_display_only(elements)
     texts = [e for e in elements if e.role in ("AXStaticText", "AXHeading", "AXTextArea") and len(e.label) > 3]
     if not texts:
         return elements
